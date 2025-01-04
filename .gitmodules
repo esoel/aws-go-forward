@@ -1,0 +1,3 @@
+[submodule "session-manager-plugin"]
+	path = session-manager-plugin
+	url = https://github.com/aws/session-manager-plugin.git
