@@ -1,3 +1,0 @@
-[submodule "session-manager-plugin"]
-	path = session-manager-plugin
-	url = https://github.com/esoel/session-manager-plugin.git
