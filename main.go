@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -29,6 +32,7 @@ type Config struct {
 	LocalPort    int
 	RemoteHost   string
 	RemotePort   int
+	UseBuiltin   bool
 }
 
 func loadConfigFromFile(configFile string) (*Config, error) {
@@ -73,7 +77,7 @@ func getInstanceID(client *ec2.Client, instanceName string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("no running instances found")
+	return "", fmt.Errorf("No running aws instances found.")
 }
 
 func startPortForwarding(client *ssm.Client, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
@@ -89,10 +93,39 @@ func startPortForwarding(client *ssm.Client, instanceID, remoteHost string, loca
 	return client.StartSession(context.TODO(), input)
 }
 
-func startSessionManagerPlugin(response *ssm.StartSessionOutput, region, profile, instanceID string) (*os.Process, error) {
+func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string) error {
 	pluginData, err := json.Marshal(response)
 	if err != nil {
-		return nil, err
+		log.Fatalf("Failed to marshal response: %v", err)
+	}
+	args := []string{
+		"aws-go-forward", // Executable name (ignored)
+		string(pluginData),
+		region,
+		"StartSession",
+		profile,
+		fmt.Sprintf(`{"Target":"%s"}`, instanceID),
+		ssmEndpoint,
+	}
+
+	// Buffer to capture output
+	var output bytes.Buffer
+
+	// Call the ValidateInputAndStartSession function
+	session.ValidateInputAndStartSession(args, &output)
+
+	// Check for errors in the output (if any)
+	if len(output.Bytes()) > 0 {
+		fmt.Printf("Session Manager Output: %s\n", output.String())
+	}
+
+	return nil
+}
+
+func startSessionManagerPluginExternal(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string) (*os.Process, error) {
+	pluginData, err := json.Marshal(response)
+	if err != nil {
+		log.Fatalf("Failed to marshal response: %v", err)
 	}
 
 	cmd := exec.Command(
@@ -102,7 +135,7 @@ func startSessionManagerPlugin(response *ssm.StartSessionOutput, region, profile
 		"StartSession",
 		profile,
 		fmt.Sprintf(`{"Target":"%s"}`, instanceID),
-		fmt.Sprintf("https://ssm.%s.amazonaws.com", region),
+		ssmEndpoint,
 	)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -121,6 +154,34 @@ func cleanup() {
 	}
 }
 
+func KeepAlive(localPort int, stopChan <-chan struct{}) {
+	ticker := time.NewTicker(30 * time.Second) // Adjust interval as needed
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Connect to the local port and send a simple query
+			conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+			if err != nil {
+				fmt.Printf("Keep-alive failed to connect: %v\n", err)
+				continue
+			}
+			_, err = conn.Write([]byte("\n")) // Minimal keep-alive packet
+			if err != nil {
+				fmt.Printf("Error sending keep-alive packet: %v\n", err)
+			} else {
+				fmt.Println("Keep-alive packet sent successfully")
+			}
+			conn.Close()
+		case <-stopChan:
+			// Stop the keep-alive goroutine
+			fmt.Println("Stopping keep-alive routine")
+			return
+		}
+	}
+}
+
 func main() {
 	var configFile string
 	var cfg Config
@@ -132,6 +193,7 @@ func main() {
 	flag.IntVar(&cfg.LocalPort, "local-port", 0, "Local port")
 	flag.StringVar(&cfg.RemoteHost, "remote-host", "", "Remote host")
 	flag.IntVar(&cfg.RemotePort, "remote-port", 0, "Remote port")
+	flag.BoolVar(&cfg.UseBuiltin, "b", false, "Use builtin session manager plugin instead of external binary")
 	flag.Parse()
 
 	if configFile != "" {
@@ -166,16 +228,32 @@ func main() {
 
 	fmt.Println("Port forwarding session started")
 
-	sessionManagerProcess, err = startSessionManagerPlugin(sessionResponse, cfg.Region, cfg.Profile, instanceID)
-	if err != nil {
-		log.Fatalf("Failed to start Session Manager Plugin: %v", err)
-	}
+	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 
-	fmt.Printf("Session Manager Plugin process started with PID: %d\n", sessionManagerProcess.Pid)
+	stopChan := make(chan struct{})
+
+	// Start keep-alive goroutine
+	go KeepAlive(cfg.LocalPort, stopChan)
+
+	if cfg.UseBuiltin {
+		err = startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+		if err != nil {
+			log.Fatalf("Failed to start Session Manager Plugin builtin: %v", err)
+		}
+	} else {
+		sessionManagerProcess, err = startSessionManagerPluginExternal(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+		if err != nil {
+			log.Fatalf("Failed to start Session Manager Plugin: %v", err)
+		}
+		fmt.Printf("Session Manager Plugin process started with PID: %d\n", sessionManagerProcess.Pid)
+	}
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
+
+	// Stop keep-alive goroutine
+	close(stopChan)
 
 	cleanup()
 }
