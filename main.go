@@ -138,7 +138,7 @@ func KeepAlive(localPort int, stopChan <-chan struct{}) {
 			if err != nil {
 				fmt.Printf("Error sending keep-alive packet: %v\n", err)
 			} else {
-				fmt.Println("Keep-alive packet sent successfully")
+				fmt.Printf(".")
 			}
 			conn.Close()
 		case <-stopChan:
