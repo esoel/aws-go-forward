@@ -83,7 +83,13 @@ aws-go-forward --config mysettings.ini
 
 ##  Testing
 
-You can spin up test infrastructure with Terraform under `test_setup/`:
+You can spin up test infrastructure with Terraform under `test_setup/`, this will use your active AWS credentials, in the us-east-1 region, in the default vpc. To costumise use:
+
+```bash
+export AWS_PROFILE=test
+export TF_VAR_region=eu-west-1
+export TF_VAR_vpc_id=<vpc_id>	
+```
 
 ### Apply
 
@@ -98,7 +104,13 @@ This creates:
 - Networking between the two
 
 Terraform will output the exact command to run `aws-go-forward` locally.
+---
 
+###  Example
+
+Once the test setup is deployed, setup the SSM forwarding and connect to the database using the 2 commands printed on your shell in 2 separate shells.
+
+---
 ### Cleanup
 
 ```bash
@@ -116,22 +128,6 @@ Destroys the above resources.
 - `make <os>-<arch>` — cross-compile (e.g. `make windows-amd64`)
 - `make test` — apply terraform test environment
 - `make clean-test` — destroy test environment
-
----
-
-##  Example
-
-Once the test setup is deployed, connect locally:
-
-```bash
-aws-go-forward --profile default --instance-name smallest-ec2-instance --local-port 3306 --remote-host terraform-...rds.amazonaws.com --remote-port 3306 --region us-east-1
-```
-
-Then connect to RDS:
-
-```bash
-mysql -h 127.0.0.1 -P 3306 -u admin -p
-```
 
 ---
 
