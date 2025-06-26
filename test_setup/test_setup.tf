@@ -39,7 +39,7 @@ locals {
 resource "aws_security_group" "rds_sg" {
   name        = "rds-security-group"
   description = "Allow EC2 instance to access RDS"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = local.selected_vpc_id
 
   ingress {
     from_port       = 3306
@@ -64,7 +64,7 @@ resource "aws_security_group" "rds_sg" {
 resource "aws_security_group" "ec2_sg" {
   name        = "ec2-security-group"
   description = "Allow EC2 instance to access internal resources"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = local.selected_vpc_id
 
   egress {
     from_port   = 0
