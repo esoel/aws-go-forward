@@ -110,10 +110,8 @@ func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, 
 	// Buffer to capture output
 	var output bytes.Buffer
 
-	// Call the ValidateInputAndStartSession function
 	session.ValidateInputAndStartSession(args, &output)
 
-	// Check for errors in the output (if any)
 	if len(output.Bytes()) > 0 {
 		fmt.Printf("Session Manager Output: %s\n", output.String())
 	}
