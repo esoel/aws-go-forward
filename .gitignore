@@ -1,2 +1,4 @@
 aws-go-forward
-test_setup/*
+build/*
+test_setup/*tfstate*
+/test_setup/.terraform*
