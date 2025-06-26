@@ -43,11 +43,31 @@ make darwin-arm64
 make windows-amd64
 ```
 
+etc...
+
 ---
 
 ##  Usage
 
 ### CLI flags
+```bash
+./aws-go-forward --help
+Usage of ./aws-go-forward:
+  -config string
+        Path to configuration file in INI format (optional)
+  -instance-name string
+        Name of the instance used for forwarding
+  -local-port int
+        Local port
+  -profile string
+        AWS profile name
+  -region string
+        AWS region
+  -remote-host string
+        Remote host
+  -remote-port int
+        Remote port
+```
 
 ```bash
 aws-go-forward \
@@ -67,10 +87,10 @@ Create a file like:
 [settings]
 profile = default
 region = us-east-1
-instanceName = my-ec2-instance
-localPort = 3306
-remoteHost = my-rds.internal
-remotePort = 3306
+instance_name = my-ec2-instance
+local_port = 3306
+remote_host = my-rds.internal
+remote_port = 3306
 ```
 
 Then run:
