@@ -1,4 +1,4 @@
 aws-go-forward
 build/*
 test_setup/*tfstate*
-/test_setup/.terraform*
+test_setup/.terraform*
