@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -24,8 +23,6 @@ import (
 	_ "github.com/aws/session-manager-plugin/src/sessionmanagerplugin/session/portsession"
 	"gopkg.in/ini.v1"
 )
-
-var sessionManagerProcess *os.Process
 
 type Config struct {
 	Profile      string
@@ -124,38 +121,6 @@ func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, 
 	return nil
 }
 
-func startSessionManagerPluginExternal(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string) (*os.Process, error) {
-	pluginData, err := json.Marshal(response)
-	if err != nil {
-		log.Fatalf("Failed to marshal response: %v", err)
-	}
-
-	cmd := exec.Command(
-		"session-manager-plugin",
-		string(pluginData),
-		region,
-		"StartSession",
-		profile,
-		fmt.Sprintf(`{"Target":"%s"}`, instanceID),
-		ssmEndpoint,
-	)
-
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	err = cmd.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	return cmd.Process, nil
-}
-
-func cleanup() {
-	if sessionManagerProcess != nil {
-		_ = sessionManagerProcess.Kill()
-		fmt.Println("Session Manager Plugin process terminated.")
-	}
-}
-
 func KeepAlive(localPort int, stopChan <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second) // Adjust interval as needed
 	defer ticker.Stop()
@@ -188,14 +153,13 @@ func main() {
 	var configFile string
 	var cfg Config
 
-	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format")
+	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
 	flag.StringVar(&cfg.Profile, "profile", "", "AWS profile name")
 	flag.StringVar(&cfg.Region, "region", "", "AWS region")
 	flag.StringVar(&cfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
 	flag.IntVar(&cfg.LocalPort, "local-port", 0, "Local port")
 	flag.StringVar(&cfg.RemoteHost, "remote-host", "", "Remote host")
 	flag.IntVar(&cfg.RemotePort, "remote-port", 0, "Remote port")
-	flag.BoolVar(&cfg.UseBuiltin, "b", false, "Use builtin session manager plugin instead of external binary")
 	flag.Parse()
 
 	if configFile != "" {
@@ -208,7 +172,7 @@ func main() {
 
 	if cfg.Profile == "" || cfg.Region == "" || cfg.InstanceName == "" ||
 		cfg.LocalPort == 0 || cfg.RemoteHost == "" || cfg.RemotePort == 0 {
-		log.Fatal("All parameters are required. Use --help for more information.")
+		log.Fatal("Missing parameters. Use --help for more information.")
 	}
 
 	awsCfg, err := createAWSSession(cfg.Profile, cfg.Region)
@@ -228,7 +192,7 @@ func main() {
 		log.Fatalf("Failed to start port forwarding: %v", err)
 	}
 
-	fmt.Println("Port forwarding session started")
+	fmt.Println("Port forwarding session started.\nPress Ctrl-C to terminate.")
 
 	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 
@@ -237,17 +201,9 @@ func main() {
 	// Start keep-alive goroutine
 	go KeepAlive(cfg.LocalPort, stopChan)
 
-	if cfg.UseBuiltin {
-		err = startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
-		if err != nil {
-			log.Fatalf("Failed to start Session Manager Plugin builtin: %v", err)
-		}
-	} else {
-		sessionManagerProcess, err = startSessionManagerPluginExternal(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
-		if err != nil {
-			log.Fatalf("Failed to start Session Manager Plugin: %v", err)
-		}
-		fmt.Printf("Session Manager Plugin process started with PID: %d\n", sessionManagerProcess.Pid)
+	err = startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+	if err != nil {
+		log.Fatalf("Failed to start Session Manager Plugin builtin: %v", err)
 	}
 
 	c := make(chan os.Signal, 1)
@@ -257,5 +213,4 @@ func main() {
 	// Stop keep-alive goroutine
 	close(stopChan)
 
-	cleanup()
 }
