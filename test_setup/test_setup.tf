@@ -13,7 +13,11 @@ variable "vpc_id" {
   default     = ""
 }
 
-# Fetch the default VPC
+resource "random_password" "db_password" {
+  length  = 16
+  special = true
+}
+
 data "aws_vpc" "default" {
   count   = var.vpc_id == "" ? 1 : 0
   default = true
@@ -35,7 +39,6 @@ locals {
   selected_subnet_id = data.aws_subnets.selected.ids[0]
 }
 
-# Security Group for RDS
 resource "aws_security_group" "rds_sg" {
   name        = "rds-security-group"
   description = "Allow EC2 instance to access RDS"
@@ -114,7 +117,7 @@ resource "aws_db_instance" "mariadb" {
   engine_version         = "10.6.14"
   instance_class         = "db.t4g.micro"
   username               = "admin"
-  password               = "admin123" # Use a secure password in production
+  password               = random_password.db_password.result
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
 
   skip_final_snapshot = true
@@ -166,6 +169,13 @@ resource "aws_instance" "ec2" {
 }
 
 output "aws_go_forward_command" {
-  value       = "aws-go-forward --profile default --instance-name ${aws_instance.ec2.tags["Name"]} --local-port 3306 --remote-host ${aws_db_instance.mariadb.address} --remote-port 3306 --region us-east-1 -b"
-  description = "Run this command on your computer to connect to the RDS instance through the EC2 instance using aws-go-forward"
+  value       = <<EOT
+  ## Run:
+./aws-go-forward --profile default --instance-name ${aws_instance.ec2.tags["Name"]} --local-port 3306 --remote-host ${aws_db_instance.mariadb.address} --remote-port 3306 --region ${var.region}
+ ## And:
+mysql -u admin -p'${random_password.db_password.result}' -h 127.0.0.1 -P 3306
+ ## in 2 separate shells.
+EOT
+  description = "Run these commands on your computer to connect to the RDS instance through the EC2 instance using aws-go-forward"
+  sensitive   = true
 }

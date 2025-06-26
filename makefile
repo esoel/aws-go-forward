@@ -36,6 +36,9 @@ install: build
 .PHONY: test
 test:
 	cd $(TEST_DIR) && terraform init && terraform apply -auto-approve
+	@echo ""
+	@echo "=== Connection Instructions ==="
+	@terraform -chdir=test_setup output -raw aws_go_forward_command || true
 
 .PHONY: clean-test
 clean-test:
