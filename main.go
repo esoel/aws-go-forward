@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,13 +26,21 @@ import (
 )
 
 type Config struct {
-	Profile      string
-	Region       string
-	InstanceName string
-	LocalPort    int
-	RemoteHost   string
-	RemotePort   int
-	UseBuiltin   bool
+	Profile      string `ini:"profile"`
+	Region       string `ini:"region"`
+	InstanceName string `ini:"instance_name"`
+	LocalPort    int    `ini:"local_port"`
+	RemoteHost   string `ini:"remote_host"`
+	RemotePort   int    `ini:"remote_port"`
+	UseBuiltin   bool   `ini:"use_builtin"`
+}
+
+func (c Config) Validate() error {
+	if c.Profile == "" || c.Region == "" || c.InstanceName == "" ||
+		c.LocalPort == 0 || c.RemoteHost == "" || c.RemotePort == 0 {
+		return errors.New("missing parameters")
+	}
+	return nil
 }
 
 func loadConfigFromFile(configFile string) (*Config, error) {
@@ -55,7 +64,15 @@ func createAWSSession(profile, region string) (aws.Config, error) {
 	)
 }
 
-func getInstanceID(client *ec2.Client, instanceName string) (string, error) {
+type ec2DescribeInstancesAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
+type ssmStartSessionAPI interface {
+	StartSession(ctx context.Context, params *ssm.StartSessionInput, optFns ...func(*ssm.Options)) (*ssm.StartSessionOutput, error)
+}
+
+func getInstanceID(client ec2DescribeInstancesAPI, instanceName string) (string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []types.Filter{
 			{
@@ -79,7 +96,7 @@ func getInstanceID(client *ec2.Client, instanceName string) (string, error) {
 	return "", fmt.Errorf("No running aws instances found.")
 }
 
-func startPortForwarding(client *ssm.Client, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
+func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
 	input := &ssm.StartSessionInput{
 		Target:       aws.String(instanceID),
 		DocumentName: aws.String("AWS-StartPortForwardingSessionToRemoteHost"),
@@ -168,8 +185,7 @@ func main() {
 		cfg = *fileCfg
 	}
 
-	if cfg.Profile == "" || cfg.Region == "" || cfg.InstanceName == "" ||
-		cfg.LocalPort == 0 || cfg.RemoteHost == "" || cfg.RemotePort == 0 {
+	if err := cfg.Validate(); err != nil {
 		log.Fatal("Missing parameters. Use --help for more information.")
 	}
 

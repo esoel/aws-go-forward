@@ -1,0 +1,283 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+)
+
+type fakeEC2Client struct {
+	output   *ec2.DescribeInstancesOutput
+	err      error
+	gotInput *ec2.DescribeInstancesInput
+}
+
+func (f *fakeEC2Client) DescribeInstances(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	f.gotInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.output, nil
+}
+
+type fakeSSMClient struct {
+	output   *ssm.StartSessionOutput
+	err      error
+	gotInput *ssm.StartSessionInput
+}
+
+func (f *fakeSSMClient) StartSession(_ context.Context, input *ssm.StartSessionInput, _ ...func(*ssm.Options)) (*ssm.StartSessionOutput, error) {
+	f.gotInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.output, nil
+}
+
+func TestLoadConfigFromFile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "settings.ini")
+	content := strings.Join([]string{
+		"[settings]",
+		"profile = default",
+		"region = us-east-1",
+		"instance_name = my-ec2-instance",
+		"local_port = 3306",
+		"remote_host = db.internal",
+		"remote_port = 3306",
+	}, "\n")
+
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := loadConfigFromFile(configPath)
+	if err != nil {
+		t.Fatalf("loadConfigFromFile() unexpected error: %v", err)
+	}
+
+	if cfg.Profile != "default" {
+		t.Fatalf("Profile = %q, want %q", cfg.Profile, "default")
+	}
+	if cfg.Region != "us-east-1" {
+		t.Fatalf("Region = %q, want %q", cfg.Region, "us-east-1")
+	}
+	if cfg.InstanceName != "my-ec2-instance" {
+		t.Fatalf("InstanceName = %q, want %q", cfg.InstanceName, "my-ec2-instance")
+	}
+	if cfg.LocalPort != 3306 {
+		t.Fatalf("LocalPort = %d, want %d", cfg.LocalPort, 3306)
+	}
+	if cfg.RemoteHost != "db.internal" {
+		t.Fatalf("RemoteHost = %q, want %q", cfg.RemoteHost, "db.internal")
+	}
+	if cfg.RemotePort != 3306 {
+		t.Fatalf("RemotePort = %d, want %d", cfg.RemotePort, 3306)
+	}
+}
+
+func TestLoadConfigFromFileMissingFile(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadConfigFromFile(filepath.Join(t.TempDir(), "does-not-exist.ini"))
+	if err == nil {
+		t.Fatal("expected error for missing config file, got nil")
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	t.Parallel()
+
+	valid := Config{
+		Profile:      "default",
+		Region:       "us-east-1",
+		InstanceName: "bastion",
+		LocalPort:    3306,
+		RemoteHost:   "db.internal",
+		RemotePort:   3306,
+	}
+
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{name: "valid", cfg: valid, wantErr: false},
+		{name: "missing profile", cfg: Config{Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
+		{name: "missing region", cfg: Config{Profile: valid.Profile, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
+		{name: "missing instance", cfg: Config{Profile: valid.Profile, Region: valid.Region, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
+		{name: "missing local port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
+		{name: "missing remote host", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemotePort: valid.RemotePort}, wantErr: true},
+		{name: "missing remote port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestGetInstanceID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns running instance and builds expected filter", func(t *testing.T) {
+		t.Parallel()
+
+		client := &fakeEC2Client{
+			output: &ec2.DescribeInstancesOutput{
+				Reservations: []ec2types.Reservation{
+					{
+						Instances: []ec2types.Instance{
+							{InstanceId: aws.String("i-stopped"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameStopped}},
+							{InstanceId: aws.String("i-running"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := getInstanceID(client, "bastion")
+		if err != nil {
+			t.Fatalf("getInstanceID() unexpected error: %v", err)
+		}
+		if got != "i-running" {
+			t.Fatalf("instance id = %q, want %q", got, "i-running")
+		}
+		if client.gotInput == nil {
+			t.Fatal("DescribeInstances input was not captured")
+		}
+		if len(client.gotInput.Filters) != 1 {
+			t.Fatalf("filters length = %d, want 1", len(client.gotInput.Filters))
+		}
+		f := client.gotInput.Filters[0]
+		if aws.ToString(f.Name) != "tag:Name" {
+			t.Fatalf("filter name = %q, want %q", aws.ToString(f.Name), "tag:Name")
+		}
+		if len(f.Values) != 1 || f.Values[0] != "bastion" {
+			t.Fatalf("filter values = %v, want [bastion]", f.Values)
+		}
+	})
+
+	t.Run("returns error when no running instance exists", func(t *testing.T) {
+		t.Parallel()
+
+		client := &fakeEC2Client{
+			output: &ec2.DescribeInstancesOutput{
+				Reservations: []ec2types.Reservation{{
+					Instances: []ec2types.Instance{{
+						InstanceId: aws.String("i-stopped"),
+						State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameStopped},
+					}},
+				}},
+			},
+		}
+
+		_, err := getInstanceID(client, "bastion")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "No running aws instances found") {
+			t.Fatalf("error = %q, expected missing-running-instance message", err.Error())
+		}
+	})
+
+	t.Run("propagates API error", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("boom")
+		client := &fakeEC2Client{err: wantErr}
+
+		_, err := getInstanceID(client, "bastion")
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
+		}
+	})
+}
+
+func TestStartPortForwarding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("builds expected StartSession request", func(t *testing.T) {
+		t.Parallel()
+
+		wantOutput := &ssm.StartSessionOutput{SessionId: aws.String("session-123")}
+		client := &fakeSSMClient{output: wantOutput}
+
+		got, err := startPortForwarding(client, "i-123", "db.internal", 3306, 3306)
+		if err != nil {
+			t.Fatalf("startPortForwarding() unexpected error: %v", err)
+		}
+		if got != wantOutput {
+			t.Fatal("startPortForwarding() did not return API output")
+		}
+		if client.gotInput == nil {
+			t.Fatal("StartSession input was not captured")
+		}
+		if aws.ToString(client.gotInput.Target) != "i-123" {
+			t.Fatalf("target = %q, want %q", aws.ToString(client.gotInput.Target), "i-123")
+		}
+		if aws.ToString(client.gotInput.DocumentName) != "AWS-StartPortForwardingSessionToRemoteHost" {
+			t.Fatalf("document name = %q, want %q", aws.ToString(client.gotInput.DocumentName), "AWS-StartPortForwardingSessionToRemoteHost")
+		}
+		if gotHost := client.gotInput.Parameters["host"]; len(gotHost) != 1 || gotHost[0] != "db.internal" {
+			t.Fatalf("host parameter = %v, want [db.internal]", gotHost)
+		}
+		if gotLocalPort := client.gotInput.Parameters["localPortNumber"]; len(gotLocalPort) != 1 || gotLocalPort[0] != "3306" {
+			t.Fatalf("localPortNumber parameter = %v, want [3306]", gotLocalPort)
+		}
+		if gotPort := client.gotInput.Parameters["portNumber"]; len(gotPort) != 1 || gotPort[0] != "3306" {
+			t.Fatalf("portNumber parameter = %v, want [3306]", gotPort)
+		}
+	})
+
+	t.Run("propagates API error", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("ssm down")
+		client := &fakeSSMClient{err: wantErr}
+
+		_, err := startPortForwarding(client, "i-123", "db.internal", 3306, 3306)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
+		}
+	})
+}
+
+func TestKeepAliveStopsWhenSignaled(t *testing.T) {
+	t.Parallel()
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		KeepAlive(65535, stop)
+		close(done)
+	}()
+
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("KeepAlive did not stop after stop channel closed")
+	}
+}
