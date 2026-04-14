@@ -281,3 +281,152 @@ func TestKeepAliveStopsWhenSignaled(t *testing.T) {
 		t.Fatal("KeepAlive did not stop after stop channel closed")
 	}
 }
+
+func TestRunSessionLifecycle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cancellation terminates session and stops keepalive", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		allowPluginExit := make(chan struct{})
+		pluginExited := make(chan struct{})
+		keepAliveStopped := make(chan struct{})
+		terminateCalled := make(chan struct{}, 1)
+
+		startPlugin := func() error {
+			defer close(pluginExited)
+			<-allowPluginExit
+			return nil
+		}
+		terminateSession := func(_ context.Context, sessionID string) error {
+			if sessionID != "session-123" {
+				t.Fatalf("sessionID = %q, want %q", sessionID, "session-123")
+			}
+			select {
+			case terminateCalled <- struct{}{}:
+			default:
+			}
+			close(allowPluginExit)
+			return nil
+		}
+		keepAliveFn := func(_ int, stopChan <-chan struct{}) {
+			<-stopChan
+			close(keepAliveStopped)
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- runSessionLifecycle(ctx, 3306, "session-123", startPlugin, terminateSession, keepAliveFn)
+		}()
+
+		cancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("runSessionLifecycle() unexpected error: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("runSessionLifecycle() did not return after cancellation")
+		}
+
+		select {
+		case <-terminateCalled:
+		default:
+			t.Fatal("terminateSession was not called")
+		}
+
+		select {
+		case <-keepAliveStopped:
+		default:
+			t.Fatal("keepalive did not stop")
+		}
+
+		select {
+		case <-pluginExited:
+		default:
+			t.Fatal("plugin did not exit")
+		}
+	})
+
+	t.Run("plugin error is returned and triggers termination", func(t *testing.T) {
+		t.Parallel()
+
+		wantErr := errors.New("plugin failed")
+		keepAliveStopped := make(chan struct{})
+		terminateCalled := make(chan struct{}, 1)
+
+		startPlugin := func() error {
+			return wantErr
+		}
+		terminateSession := func(_ context.Context, sessionID string) error {
+			if sessionID != "session-123" {
+				t.Fatalf("sessionID = %q, want %q", sessionID, "session-123")
+			}
+			terminateCalled <- struct{}{}
+			return nil
+		}
+		keepAliveFn := func(_ int, stopChan <-chan struct{}) {
+			<-stopChan
+			close(keepAliveStopped)
+		}
+
+		err := runSessionLifecycle(context.Background(), 3306, "session-123", startPlugin, terminateSession, keepAliveFn)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+
+		select {
+		case <-terminateCalled:
+		default:
+			t.Fatal("terminateSession was not called")
+		}
+
+		select {
+		case <-keepAliveStopped:
+		default:
+			t.Fatal("keepalive did not stop")
+		}
+	})
+
+	t.Run("terminate session failure is returned", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		terminateErr := errors.New("terminate failed")
+		allowPluginExit := make(chan struct{})
+
+		startPlugin := func() error {
+			<-allowPluginExit
+			return nil
+		}
+		terminateSession := func(_ context.Context, _ string) error {
+			close(allowPluginExit)
+			return terminateErr
+		}
+		keepAliveFn := func(_ int, stopChan <-chan struct{}) {
+			<-stopChan
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- runSessionLifecycle(ctx, 3306, "session-123", startPlugin, terminateSession, keepAliveFn)
+		}()
+
+		cancel()
+
+		select {
+		case err := <-done:
+			if !errors.Is(err, terminateErr) {
+				t.Fatalf("expected %v, got %v", terminateErr, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("runSessionLifecycle() did not return")
+		}
+	})
+}

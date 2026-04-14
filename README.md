@@ -134,7 +134,7 @@ Once the test setup is deployed, setup the SSM forwarding and connect to the dat
 ### Cleanup
 
 ```bash
-make clean-test
+make integration-down
 ```
 
 Destroys the above resources.
@@ -148,7 +148,7 @@ Destroys the above resources.
 - `make <os>-<arch>` — cross-compile (e.g. `make windows-amd64`)
 - `make test` — run Go unit tests (`go test ./...`)
 - `make integration-up` — apply terraform test environment
-- `make clean-test` — destroy test environment
+- `make integration-down` — destroy test environment
 
 ---
 

@@ -72,6 +72,10 @@ type ssmStartSessionAPI interface {
 	StartSession(ctx context.Context, params *ssm.StartSessionInput, optFns ...func(*ssm.Options)) (*ssm.StartSessionOutput, error)
 }
 
+type ssmTerminateSessionAPI interface {
+	TerminateSession(ctx context.Context, params *ssm.TerminateSessionInput, optFns ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
+}
+
 func getInstanceID(client ec2DescribeInstancesAPI, instanceName string) (string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []types.Filter{
@@ -109,10 +113,82 @@ func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost strin
 	return client.StartSession(context.TODO(), input)
 }
 
+func terminatePortForwardingSession(ctx context.Context, client ssmTerminateSessionAPI, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	_, err := client.TerminateSession(ctx, &ssm.TerminateSessionInput{
+		SessionId: aws.String(sessionID),
+	})
+	return err
+}
+
+func runSessionLifecycle(
+	ctx context.Context,
+	localPort int,
+	sessionID string,
+	startPlugin func() error,
+	terminateSession func(context.Context, string) error,
+	keepAliveFn func(int, <-chan struct{}),
+) error {
+	stopChan := make(chan struct{})
+	pluginErrCh := make(chan error, 1)
+	keepAliveDone := make(chan struct{})
+
+	go func() {
+		defer close(keepAliveDone)
+		keepAliveFn(localPort, stopChan)
+	}()
+	go func() {
+		pluginErrCh <- startPlugin()
+	}()
+
+	var (
+		pluginErr error
+		ctxDone   bool
+	)
+
+	select {
+	case pluginErr = <-pluginErrCh:
+	case <-ctx.Done():
+		ctxDone = true
+	}
+
+	close(stopChan)
+	select {
+	case <-keepAliveDone:
+	case <-time.After(time.Second):
+		return errors.New("timed out waiting for keep-alive to stop")
+	}
+
+	shouldTerminate := sessionID != "" && (ctxDone || pluginErr != nil)
+	if shouldTerminate {
+		if err := terminateSession(context.Background(), sessionID); err != nil {
+			if pluginErr != nil {
+				return errors.Join(pluginErr, err)
+			}
+			return err
+		}
+	}
+
+	if ctxDone {
+		select {
+		case postCancelPluginErr := <-pluginErrCh:
+			if postCancelPluginErr != nil {
+				pluginErr = postCancelPluginErr
+			}
+		case <-time.After(5 * time.Second):
+			return errors.New("timed out waiting for session plugin to stop")
+		}
+	}
+
+	return pluginErr
+}
+
 func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string) error {
 	pluginData, err := json.Marshal(response)
 	if err != nil {
-		log.Fatalf("Failed to marshal response: %v", err)
+		return fmt.Errorf("failed to marshal session response: %w", err)
 	}
 	args := []string{
 		"aws-go-forward", // Executable name (ignored)
@@ -210,21 +286,22 @@ func main() {
 
 	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 
-	stopChan := make(chan struct{})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Start keep-alive goroutine
-	go KeepAlive(cfg.LocalPort, stopChan)
-
-	err = startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+	err = runSessionLifecycle(
+		ctx,
+		cfg.LocalPort,
+		aws.ToString(sessionResponse.SessionId),
+		func() error {
+			return startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+		},
+		func(ctx context.Context, sessionID string) error {
+			return terminatePortForwardingSession(ctx, ssmClient, sessionID)
+		},
+		KeepAlive,
+	)
 	if err != nil {
-		log.Fatalf("Failed to start Session Manager Plugin builtin: %v", err)
+		log.Fatalf("Session failed: %v", err)
 	}
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
-
-	// Stop keep-alive goroutine
-	close(stopChan)
-
 }

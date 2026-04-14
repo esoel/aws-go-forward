@@ -114,7 +114,7 @@ resource "aws_iam_instance_profile" "ssm_instance_profile" {
 resource "aws_db_instance" "mariadb" {
   allocated_storage      = 20
   engine                 = "mariadb"
-  engine_version         = "10.6.14"
+  engine_version         = "11.8.6"
   instance_class         = "db.t4g.micro"
   username               = "admin"
   password               = random_password.db_password.result
