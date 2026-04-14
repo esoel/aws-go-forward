@@ -103,7 +103,7 @@ aws-go-forward --config mysettings.ini
 
 ##  Testing
 
-You can spin up test infrastructure with Terraform under `test_setup/`, this will use your active AWS credentials, in the us-east-1 region, in the default vpc. To costumise use:
+You can spin up test infrastructure with Terraform under `integration_setup/`, this will use your active AWS credentials, in the us-east-1 region, in the default vpc. To costumise use:
 
 ```bash
 export AWS_PROFILE=test
@@ -114,7 +114,7 @@ export TF_VAR_vpc_id=<vpc_id>
 ### Apply
 
 ```bash
-make test
+make integration-up
 ```
 
 This creates:
@@ -146,7 +146,8 @@ Destroys the above resources.
 - `make` — build for your current system
 - `make install` — install to `/usr/local/bin`
 - `make <os>-<arch>` — cross-compile (e.g. `make windows-amd64`)
-- `make test` — apply terraform test environment
+- `make test` — run Go unit tests (`go test ./...`)
+- `make integration-up` — apply terraform test environment
 - `make clean-test` — destroy test environment
 
 ---
@@ -155,7 +156,7 @@ Destroys the above resources.
 
 - `main.go` – Main utility
 - `Makefile` – Build and test helpers
-- `test_setup/` – Terraform environment for verification
+- `integration_setup/` – Terraform environment for verification
 
 
 ---

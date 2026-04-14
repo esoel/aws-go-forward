@@ -2,7 +2,7 @@
 APP_NAME := aws-go-forward
 BUILD_DIR := build
 INSTALL_DIR := /usr/local/bin
-TEST_DIR := test_setup
+INTEGRATION_DIR := integration_setup
 
 # === Default ===
 .PHONY: all
@@ -32,17 +32,22 @@ install: build
 	@echo "Installing to $(INSTALL_DIR)..."
 	install -m 0755 $(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
 
-# === Terraform test ===
+# === Unit Tests ===
 .PHONY: test
 test:
-	cd $(TEST_DIR) && terraform init && terraform apply -auto-approve
+	go test ./...
+
+# === Terraform Integration Environment ===
+.PHONY: integration-up
+integration-up:
+	cd $(INTEGRATION_DIR) && terraform init && terraform apply -auto-approve
 	@echo ""
 	@echo "=== Connection Instructions ==="
-	@terraform -chdir=test_setup output -raw aws_go_forward_command || true
+	@terraform -chdir=$(INTEGRATION_DIR) output -raw aws_go_forward_command || true
 
 .PHONY: clean-test
 clean-test:
-	cd $(TEST_DIR) && terraform destroy -auto-approve
+	cd $(INTEGRATION_DIR) && terraform destroy -auto-approve
 
 # === Clean ===
 .PHONY: clean
