@@ -14,7 +14,7 @@
 
 ## Prerequisites
 
-- Go 1.20+ installed
+- Go 1.24.2+ installed
 - AWS credentials configured (`~/.aws/credentials`)
 - EC2 instance with:
   - `AmazonSSMManagedInstanceCore` IAM policy
