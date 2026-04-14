@@ -14,9 +14,11 @@ variable "vpc_id" {
 }
 
 resource "random_password" "db_password" {
-  length           = 16
-  special          = true
-  override_special = "!#$%&()*+,-./:;<=>?@[]^_{|}~"
+  length  = 16
+  special = true
+  # RDS disallows '/', '@', '"' and space in master passwords.
+  # Keep single quote excluded as well to avoid shell escaping issues in integration output commands.
+  override_special = "!#$%&()*+,-.:;<=>?[]^_{|}~"
 }
 
 data "aws_vpc" "default" {
