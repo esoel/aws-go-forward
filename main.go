@@ -198,16 +198,23 @@ func getInstanceIDByName(ctx context.Context, client ec2DescribeInstancesAPI, in
 	}
 
 	runningIDs := make([]string, 0)
+	var firstMalformedErr error
 	for _, reservation := range output.Reservations {
 		for _, instance := range reservation.Instances {
 			if instance.State == nil {
-				return "", fmt.Errorf("%w for instance name %q", ErrInvalidInstanceState, instanceName)
+				if firstMalformedErr == nil {
+					firstMalformedErr = fmt.Errorf("%w for instance name %q", ErrInvalidInstanceState, instanceName)
+				}
+				continue
 			}
 			if instance.State.Name != types.InstanceStateNameRunning {
 				continue
 			}
 			if instance.InstanceId == nil || strings.TrimSpace(*instance.InstanceId) == "" {
-				return "", fmt.Errorf("%w for instance name %q", ErrMissingInstanceID, instanceName)
+				if firstMalformedErr == nil {
+					firstMalformedErr = fmt.Errorf("%w for instance name %q", ErrMissingInstanceID, instanceName)
+				}
+				continue
 			}
 			runningIDs = append(runningIDs, *instance.InstanceId)
 		}
@@ -215,6 +222,9 @@ func getInstanceIDByName(ctx context.Context, client ec2DescribeInstancesAPI, in
 
 	switch len(runningIDs) {
 	case 0:
+		if firstMalformedErr != nil {
+			return "", firstMalformedErr
+		}
 		return "", fmt.Errorf("%w for instance name %q", ErrNoRunningInstances, instanceName)
 	case 1:
 		return runningIDs[0], nil

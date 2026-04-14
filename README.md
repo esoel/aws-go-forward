@@ -51,8 +51,8 @@ etc...
 
 ### CLI flags
 ```bash
-./aws-go-forward --help
-Usage of ./aws-go-forward:
+aws-go-forward --help
+Usage of aws-go-forward:
   -any
         Allow selecting a random running instance when multiple instances match --instance-name
   -config string

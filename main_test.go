@@ -468,6 +468,34 @@ func TestResolveInstanceIDByName(t *testing.T) {
 		}
 	})
 
+	t.Run("skips malformed entries when valid running instance exists", func(t *testing.T) {
+		t.Parallel()
+
+		client := &fakeEC2Client{
+			output: &ec2.DescribeInstancesOutput{
+				Reservations: []ec2types.Reservation{
+					{
+						Instances: []ec2types.Instance{
+							{InstanceId: aws.String("i-bad-state"), State: nil},
+							{InstanceId: nil, State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}},
+							{InstanceId: aws.String("i-good"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
+			return 0, nil
+		})
+		if err != nil {
+			t.Fatalf("getInstanceIDByName() unexpected error: %v", err)
+		}
+		if got != "i-good" {
+			t.Fatalf("instance id = %q, want %q", got, "i-good")
+		}
+	})
+
 	t.Run("handles multiple reservations with one running match", func(t *testing.T) {
 		t.Parallel()
 
