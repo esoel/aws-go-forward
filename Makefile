@@ -8,11 +8,16 @@ INTEGRATION_DIR := integration_setup
 .PHONY: all
 all: build
 
+# === Build Directory ===
+.PHONY: build-dir
+build-dir:
+	mkdir -p $(BUILD_DIR)
+
 # === Build for host ===
 .PHONY: build
-build:
+build: build-dir
 	@echo "Building for host platform..."
-	go build -o $(APP_NAME) .
+	go build -o $(BUILD_DIR)/$(APP_NAME) .
 
 # === Cross-Compilation Targets ===
 OSARCH := \
@@ -21,7 +26,10 @@ OSARCH := \
 	windows-amd64 windows-arm64 \
 	freebsd-amd64 freebsd-arm64
 
-$(OSARCH):
+.PHONY: cross
+cross: $(OSARCH)
+
+$(OSARCH): build-dir
 	@echo "Building for $@..."
 	GOOS=$(word 1,$(subst -, ,$@)) GOARCH=$(word 2,$(subst -, ,$@)) \
 	go build -o $(BUILD_DIR)/$(APP_NAME)-$@$(if $(findstring windows,$@),.exe,) .
@@ -30,12 +38,22 @@ $(OSARCH):
 .PHONY: install
 install: build
 	@echo "Installing to $(INSTALL_DIR)..."
-	install -m 0755 $(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
+	install -m 0755 $(BUILD_DIR)/$(APP_NAME) $(INSTALL_DIR)/$(APP_NAME)
 
 # === Unit Tests ===
 .PHONY: test
 test:
 	go test ./...
+
+# === Go Maintenance ===
+.PHONY: fmt vet check
+fmt:
+	go fmt ./...
+
+vet:
+	go vet ./...
+
+check: fmt vet test
 
 # === Terraform Integration Environment ===
 .PHONY: integration-up
