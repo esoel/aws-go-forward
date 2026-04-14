@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,10 +36,42 @@ type Config struct {
 	UseBuiltin   bool   `ini:"use_builtin"`
 }
 
+var (
+	ErrMissingSettingsSection = errors.New("missing [settings] section")
+	ErrMissingProfile         = errors.New("missing profile")
+	ErrMissingRegion          = errors.New("missing region")
+	ErrMissingInstanceName    = errors.New("missing instance name")
+	ErrMissingLocalPort       = errors.New("missing local port")
+	ErrInvalidLocalPort       = errors.New("invalid local port")
+	ErrMissingRemoteHost      = errors.New("missing remote host")
+	ErrMissingRemotePort      = errors.New("missing remote port")
+	ErrInvalidRemotePort      = errors.New("invalid remote port")
+)
+
 func (c Config) Validate() error {
-	if c.Profile == "" || c.Region == "" || c.InstanceName == "" ||
-		c.LocalPort == 0 || c.RemoteHost == "" || c.RemotePort == 0 {
-		return errors.New("missing parameters")
+	if strings.TrimSpace(c.Profile) == "" {
+		return ErrMissingProfile
+	}
+	if strings.TrimSpace(c.Region) == "" {
+		return ErrMissingRegion
+	}
+	if strings.TrimSpace(c.InstanceName) == "" {
+		return ErrMissingInstanceName
+	}
+	if c.LocalPort == 0 {
+		return ErrMissingLocalPort
+	}
+	if c.LocalPort < 1 || c.LocalPort > 65535 {
+		return ErrInvalidLocalPort
+	}
+	if strings.TrimSpace(c.RemoteHost) == "" {
+		return ErrMissingRemoteHost
+	}
+	if c.RemotePort == 0 {
+		return ErrMissingRemotePort
+	}
+	if c.RemotePort < 1 || c.RemotePort > 65535 {
+		return ErrInvalidRemotePort
 	}
 	return nil
 }
@@ -49,12 +82,48 @@ func loadConfigFromFile(configFile string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !iniCfg.HasSection("settings") {
+		return nil, ErrMissingSettingsSection
+	}
 	section := iniCfg.Section("settings")
-	err = section.MapTo(cfg)
+	err = section.StrictMapTo(cfg)
 	if err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func collectSetFlags(fs *flag.FlagSet) map[string]bool {
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = true
+	})
+	return setFlags
+}
+
+func mergeConfigWithCLIOverrides(base, cli Config, setFlags map[string]bool) Config {
+	merged := base
+
+	if setFlags["profile"] {
+		merged.Profile = cli.Profile
+	}
+	if setFlags["region"] {
+		merged.Region = cli.Region
+	}
+	if setFlags["instance-name"] {
+		merged.InstanceName = cli.InstanceName
+	}
+	if setFlags["local-port"] {
+		merged.LocalPort = cli.LocalPort
+	}
+	if setFlags["remote-host"] {
+		merged.RemoteHost = cli.RemoteHost
+	}
+	if setFlags["remote-port"] {
+		merged.RemotePort = cli.RemotePort
+	}
+
+	return merged
 }
 
 func createAWSSession(profile, region string) (aws.Config, error) {
@@ -242,27 +311,30 @@ func KeepAlive(localPort int, stopChan <-chan struct{}) {
 
 func main() {
 	var configFile string
-	var cfg Config
+	var cliCfg Config
 
 	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
-	flag.StringVar(&cfg.Profile, "profile", "", "AWS profile name")
-	flag.StringVar(&cfg.Region, "region", "", "AWS region")
-	flag.StringVar(&cfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
-	flag.IntVar(&cfg.LocalPort, "local-port", 0, "Local port")
-	flag.StringVar(&cfg.RemoteHost, "remote-host", "", "Remote host")
-	flag.IntVar(&cfg.RemotePort, "remote-port", 0, "Remote port")
+	flag.StringVar(&cliCfg.Profile, "profile", "", "AWS profile name")
+	flag.StringVar(&cliCfg.Region, "region", "", "AWS region")
+	flag.StringVar(&cliCfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
+	flag.IntVar(&cliCfg.LocalPort, "local-port", 0, "Local port")
+	flag.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
+	flag.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
 	flag.Parse()
+
+	setFlags := collectSetFlags(flag.CommandLine)
+	cfg := cliCfg
 
 	if configFile != "" {
 		fileCfg, err := loadConfigFromFile(configFile)
 		if err != nil {
 			log.Fatalf("Failed to load configuration file: %v", err)
 		}
-		cfg = *fileCfg
+		cfg = mergeConfigWithCLIOverrides(*fileCfg, cliCfg, setFlags)
 	}
 
 	if err := cfg.Validate(); err != nil {
-		log.Fatal("Missing parameters. Use --help for more information.")
+		log.Fatalf("Invalid configuration: %v. Use --help for more information.", err)
 	}
 
 	awsCfg, err := createAWSSession(cfg.Profile, cfg.Region)
