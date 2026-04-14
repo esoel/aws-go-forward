@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -30,21 +31,30 @@ type Config struct {
 	Profile      string `ini:"profile"`
 	Region       string `ini:"region"`
 	InstanceName string `ini:"instance_name"`
+	InstanceID   string `ini:"instance_id"`
 	LocalPort    int    `ini:"local_port"`
 	RemoteHost   string `ini:"remote_host"`
 	RemotePort   int    `ini:"remote_port"`
 }
 
 var (
-	ErrMissingSettingsSection = errors.New("missing [settings] section")
-	ErrMissingProfile         = errors.New("missing profile")
-	ErrMissingRegion          = errors.New("missing region")
-	ErrMissingInstanceName    = errors.New("missing instance name")
-	ErrMissingLocalPort       = errors.New("missing local port")
-	ErrInvalidLocalPort       = errors.New("invalid local port")
-	ErrMissingRemoteHost      = errors.New("missing remote host")
-	ErrMissingRemotePort      = errors.New("missing remote port")
-	ErrInvalidRemotePort      = errors.New("invalid remote port")
+	ErrMissingSettingsSection       = errors.New("missing [settings] section")
+	ErrMissingProfile               = errors.New("missing profile")
+	ErrMissingRegion                = errors.New("missing region")
+	ErrMissingInstanceSelector      = errors.New("missing instance selector")
+	ErrConflictingInstanceSelectors = errors.New("instance name and instance id are mutually exclusive")
+	ErrAnyRequiresInstanceName      = errors.New("any mode requires instance name selection")
+	ErrMissingLocalPort             = errors.New("missing local port")
+	ErrInvalidLocalPort             = errors.New("invalid local port")
+	ErrMissingRemoteHost            = errors.New("missing remote host")
+	ErrMissingRemotePort            = errors.New("missing remote port")
+	ErrInvalidRemotePort            = errors.New("invalid remote port")
+	ErrNoRunningInstances           = errors.New("no running instances found")
+	ErrMultipleRunningInstances     = errors.New("multiple running instances found")
+	ErrInvalidInstanceState         = errors.New("instance has nil state")
+	ErrMissingInstanceID            = errors.New("instance has nil id")
+	ErrInstanceNotFound             = errors.New("instance not found")
+	ErrInstanceNotRunning           = errors.New("instance is not running")
 )
 
 func (c Config) Validate() error {
@@ -54,8 +64,13 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Region) == "" {
 		return ErrMissingRegion
 	}
-	if strings.TrimSpace(c.InstanceName) == "" {
-		return ErrMissingInstanceName
+	instanceName := strings.TrimSpace(c.InstanceName)
+	instanceID := strings.TrimSpace(c.InstanceID)
+	if instanceName == "" && instanceID == "" {
+		return ErrMissingInstanceSelector
+	}
+	if instanceName != "" && instanceID != "" {
+		return ErrConflictingInstanceSelectors
 	}
 	if c.LocalPort == 0 {
 		return ErrMissingLocalPort
@@ -115,6 +130,11 @@ func mergeConfigWithCLIOverrides(base, cli Config, setFlags map[string]bool) Con
 	}
 	if setFlags["instance-name"] {
 		merged.InstanceName = cli.InstanceName
+		merged.InstanceID = ""
+	}
+	if setFlags["instance-id"] {
+		merged.InstanceID = cli.InstanceID
+		merged.InstanceName = ""
 	}
 	if setFlags["local-port"] {
 		merged.LocalPort = cli.LocalPort
@@ -148,7 +168,22 @@ type ssmTerminateSessionAPI interface {
 	TerminateSession(ctx context.Context, params *ssm.TerminateSessionInput, optFns ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
 }
 
-func getInstanceID(client ec2DescribeInstancesAPI, instanceName string) (string, error) {
+func randomIndex(n int) (int, error) {
+	if n <= 0 {
+		return 0, fmt.Errorf("cannot choose random index from %d candidates", n)
+	}
+	chooser := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return chooser.Intn(n), nil
+}
+
+func validateSelectionOptions(cfg Config, allowAny bool) error {
+	if allowAny && strings.TrimSpace(cfg.InstanceName) == "" {
+		return ErrAnyRequiresInstanceName
+	}
+	return nil
+}
+
+func getInstanceIDByName(ctx context.Context, client ec2DescribeInstancesAPI, instanceName string, allowAny bool, chooseIndex func(int) (int, error)) (string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []types.Filter{
 			{
@@ -157,19 +192,97 @@ func getInstanceID(client ec2DescribeInstancesAPI, instanceName string) (string,
 			},
 		},
 	}
-	output, err := client.DescribeInstances(context.TODO(), input)
+	output, err := client.DescribeInstances(ctx, input)
 	if err != nil {
 		return "", err
 	}
 
+	runningIDs := make([]string, 0)
+	var firstMalformedErr error
 	for _, reservation := range output.Reservations {
 		for _, instance := range reservation.Instances {
+			if instance.State == nil {
+				if firstMalformedErr == nil {
+					firstMalformedErr = fmt.Errorf("%w for instance name %q", ErrInvalidInstanceState, instanceName)
+				}
+				continue
+			}
+			if instance.State.Name != types.InstanceStateNameRunning {
+				continue
+			}
+			if instance.InstanceId == nil || strings.TrimSpace(*instance.InstanceId) == "" {
+				if firstMalformedErr == nil {
+					firstMalformedErr = fmt.Errorf("%w for instance name %q", ErrMissingInstanceID, instanceName)
+				}
+				continue
+			}
+			runningIDs = append(runningIDs, *instance.InstanceId)
+		}
+	}
+
+	switch len(runningIDs) {
+	case 0:
+		if firstMalformedErr != nil {
+			return "", firstMalformedErr
+		}
+		return "", fmt.Errorf("%w for instance name %q", ErrNoRunningInstances, instanceName)
+	case 1:
+		return runningIDs[0], nil
+	default:
+		if !allowAny {
+			return "", fmt.Errorf("%w for instance name %q (%d matches)", ErrMultipleRunningInstances, instanceName, len(runningIDs))
+		}
+
+		idx, err := chooseIndex(len(runningIDs))
+		if err != nil {
+			return "", fmt.Errorf("failed to choose instance among %d matches: %w", len(runningIDs), err)
+		}
+		if idx < 0 || idx >= len(runningIDs) {
+			return "", fmt.Errorf("random selector returned out-of-range index %d for %d matches", idx, len(runningIDs))
+		}
+		return runningIDs[idx], nil
+	}
+}
+
+func getInstanceIDByID(ctx context.Context, client ec2DescribeInstancesAPI, instanceID string) (string, error) {
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+	output, err := client.DescribeInstances(ctx, input)
+	if err != nil {
+		return "", err
+	}
+
+	found := false
+	for _, reservation := range output.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.InstanceId == nil || strings.TrimSpace(*instance.InstanceId) == "" {
+				return "", fmt.Errorf("%w while resolving instance id %q", ErrMissingInstanceID, instanceID)
+			}
+			if *instance.InstanceId != instanceID {
+				continue
+			}
+			found = true
+			if instance.State == nil {
+				return "", fmt.Errorf("%w for instance id %q", ErrInvalidInstanceState, instanceID)
+			}
 			if instance.State.Name == types.InstanceStateNameRunning {
-				return *instance.InstanceId, nil
+				return instanceID, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("No running aws instances found.")
+
+	if found {
+		return "", fmt.Errorf("%w: %q", ErrInstanceNotRunning, instanceID)
+	}
+	return "", fmt.Errorf("%w: %q", ErrInstanceNotFound, instanceID)
+}
+
+func resolveInstanceID(ctx context.Context, client ec2DescribeInstancesAPI, cfg Config, allowAny bool) (string, error) {
+	if strings.TrimSpace(cfg.InstanceID) != "" {
+		return getInstanceIDByID(ctx, client, cfg.InstanceID)
+	}
+	return getInstanceIDByName(ctx, client, cfg.InstanceName, allowAny, randomIndex)
 }
 
 func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
@@ -314,12 +427,17 @@ func KeepAlive(localPort int, stopChan <-chan struct{}) {
 
 func main() {
 	var configFile string
+	var allowAny bool
 	var cliCfg Config
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
 	flag.StringVar(&cliCfg.Profile, "profile", "", "AWS profile name")
 	flag.StringVar(&cliCfg.Region, "region", "", "AWS region")
 	flag.StringVar(&cliCfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
+	flag.StringVar(&cliCfg.InstanceID, "instance-id", "", "Instance ID used for forwarding")
+	flag.BoolVar(&allowAny, "any", false, "Allow selecting a random running instance when multiple instances match --instance-name")
 	flag.IntVar(&cliCfg.LocalPort, "local-port", 0, "Local port")
 	flag.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
 	flag.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
@@ -339,6 +457,9 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v. Use --help for more information.", err)
 	}
+	if err := validateSelectionOptions(cfg, allowAny); err != nil {
+		log.Fatalf("Invalid selection options: %v. Use --help for more information.", err)
+	}
 
 	awsCfg, err := createAWSSession(cfg.Profile, cfg.Region)
 	if err != nil {
@@ -346,7 +467,7 @@ func main() {
 	}
 
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	instanceID, err := getInstanceID(ec2Client, cfg.InstanceName)
+	instanceID, err := resolveInstanceID(ctx, ec2Client, cfg, allowAny)
 	if err != nil {
 		log.Fatalf("Failed to get instance ID: %v", err)
 	}
@@ -360,9 +481,6 @@ func main() {
 	fmt.Println("Port forwarding session started.\nPress Ctrl-C to terminate.")
 
 	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	err = runSessionLifecycle(
 		ctx,
