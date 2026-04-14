@@ -855,7 +855,7 @@ func TestStartPortForwarding(t *testing.T) {
 		wantOutput := &ssm.StartSessionOutput{SessionId: aws.String("session-123")}
 		client := &fakeSSMClient{output: wantOutput}
 
-		got, err := startPortForwarding(client, "i-123", "db.internal", 3306, 3306)
+		got, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306)
 		if err != nil {
 			t.Fatalf("startPortForwarding() unexpected error: %v", err)
 		}
@@ -888,7 +888,7 @@ func TestStartPortForwarding(t *testing.T) {
 		wantErr := errors.New("ssm down")
 		client := &fakeSSMClient{err: wantErr}
 
-		_, err := startPortForwarding(client, "i-123", "db.internal", 3306, 3306)
+		_, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
 		}

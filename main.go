@@ -149,8 +149,8 @@ func mergeConfigWithCLIOverrides(base, cli Config, setFlags map[string]bool) Con
 	return merged
 }
 
-func createAWSSession(profile, region string) (aws.Config, error) {
-	return config.LoadDefaultConfig(context.TODO(),
+func createAWSSession(ctx context.Context, profile, region string) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
 	)
@@ -285,7 +285,7 @@ func resolveInstanceID(ctx context.Context, client ec2DescribeInstancesAPI, cfg 
 	return getInstanceIDByName(ctx, client, cfg.InstanceName, allowAny, randomIndex)
 }
 
-func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
+func startPortForwarding(ctx context.Context, client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
 	input := &ssm.StartSessionInput{
 		Target:       aws.String(instanceID),
 		DocumentName: aws.String("AWS-StartPortForwardingSessionToRemoteHost"),
@@ -295,7 +295,7 @@ func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost strin
 			"portNumber":      {fmt.Sprintf("%d", remotePort)},
 		},
 	}
-	return client.StartSession(context.TODO(), input)
+	return client.StartSession(ctx, input)
 }
 
 func terminatePortForwardingSession(ctx context.Context, client ssmTerminateSessionAPI, sessionID string) error {
@@ -461,7 +461,7 @@ func main() {
 		log.Fatalf("Invalid selection options: %v. Use --help for more information.", err)
 	}
 
-	awsCfg, err := createAWSSession(cfg.Profile, cfg.Region)
+	awsCfg, err := createAWSSession(ctx, cfg.Profile, cfg.Region)
 	if err != nil {
 		log.Fatalf("Failed to create AWS session: %v", err)
 	}
@@ -473,7 +473,7 @@ func main() {
 	}
 
 	ssmClient := ssm.NewFromConfig(awsCfg)
-	sessionResponse, err := startPortForwarding(ssmClient, instanceID, cfg.RemoteHost, cfg.LocalPort, cfg.RemotePort)
+	sessionResponse, err := startPortForwarding(ctx, ssmClient, instanceID, cfg.RemoteHost, cfg.LocalPort, cfg.RemotePort)
 	if err != nil {
 		log.Fatalf("Failed to start port forwarding: %v", err)
 	}
