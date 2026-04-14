@@ -383,7 +383,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		got, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		got, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if err != nil {
@@ -416,7 +416,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		_, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if !errors.Is(err, ErrNoRunningInstances) {
@@ -438,7 +438,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		_, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if !errors.Is(err, ErrInvalidInstanceState) {
@@ -460,7 +460,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		_, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if !errors.Is(err, ErrMissingInstanceID) {
@@ -488,7 +488,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		got, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		got, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if err != nil {
@@ -515,7 +515,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		_, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if !errors.Is(err, ErrMultipleRunningInstances) {
@@ -540,7 +540,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 		}
 		chooserCalled := false
 
-		got, err := getInstanceIDByName(client, "bastion", true, func(n int) (int, error) {
+		got, err := getInstanceIDByName(context.Background(), client, "bastion", true, func(n int) (int, error) {
 			chooserCalled = true
 			if n != 2 {
 				t.Fatalf("chooser n = %d, want 2", n)
@@ -564,7 +564,7 @@ func TestResolveInstanceIDByName(t *testing.T) {
 		wantErr := errors.New("boom")
 		client := &fakeEC2Client{err: wantErr}
 
-		_, err := getInstanceIDByName(client, "bastion", false, func(_ int) (int, error) {
+		_, err := getInstanceIDByName(context.Background(), client, "bastion", false, func(_ int) (int, error) {
 			return 0, nil
 		})
 		if !errors.Is(err, wantErr) {
@@ -591,7 +591,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 			},
 		}
 
-		got, err := getInstanceIDByID(client, "i-target")
+		got, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if err != nil {
 			t.Fatalf("getInstanceIDByID() unexpected error: %v", err)
 		}
@@ -615,7 +615,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByID(client, "i-target")
+		_, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if !errors.Is(err, ErrInstanceNotFound) {
 			t.Fatalf("expected %v, got %v", ErrInstanceNotFound, err)
 		}
@@ -636,7 +636,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByID(client, "i-target")
+		_, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if !errors.Is(err, ErrInstanceNotRunning) {
 			t.Fatalf("expected %v, got %v", ErrInstanceNotRunning, err)
 		}
@@ -657,7 +657,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByID(client, "i-target")
+		_, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if !errors.Is(err, ErrInvalidInstanceState) {
 			t.Fatalf("expected %v, got %v", ErrInvalidInstanceState, err)
 		}
@@ -678,7 +678,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 			},
 		}
 
-		_, err := getInstanceIDByID(client, "i-target")
+		_, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if !errors.Is(err, ErrMissingInstanceID) {
 			t.Fatalf("expected %v, got %v", ErrMissingInstanceID, err)
 		}
@@ -690,7 +690,7 @@ func TestGetInstanceIDByID(t *testing.T) {
 		wantErr := errors.New("boom")
 		client := &fakeEC2Client{err: wantErr}
 
-		_, err := getInstanceIDByID(client, "i-target")
+		_, err := getInstanceIDByID(context.Background(), client, "i-target")
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
 		}
@@ -700,10 +700,122 @@ func TestGetInstanceIDByID(t *testing.T) {
 func TestValidateSelectionOptions(t *testing.T) {
 	t.Parallel()
 
-	err := validateSelectionOptions(Config{InstanceID: "i-1234567890"}, true)
-	if !errors.Is(err, ErrAnyRequiresInstanceName) {
-		t.Fatalf("expected %v, got %v", ErrAnyRequiresInstanceName, err)
+	tests := []struct {
+		name     string
+		cfg      Config
+		allowAny bool
+		wantErr  error
+	}{
+		{
+			name:     "any with instance id is invalid",
+			cfg:      Config{InstanceID: "i-1234567890"},
+			allowAny: true,
+			wantErr:  ErrAnyRequiresInstanceName,
+		},
+		{
+			name:     "any with instance name is valid",
+			cfg:      Config{InstanceName: "bastion"},
+			allowAny: true,
+			wantErr:  nil,
+		},
+		{
+			name:     "instance name without any is valid",
+			cfg:      Config{InstanceName: "bastion"},
+			allowAny: false,
+			wantErr:  nil,
+		},
+		{
+			name:     "instance id without any is valid",
+			cfg:      Config{InstanceID: "i-1234567890"},
+			allowAny: false,
+			wantErr:  nil,
+		},
 	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateSelectionOptions(tt.cfg, tt.allowAny)
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected %v, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestResolveInstanceID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("uses instance id path when instance id is set", func(t *testing.T) {
+		t.Parallel()
+
+		client := &fakeEC2Client{
+			output: &ec2.DescribeInstancesOutput{
+				Reservations: []ec2types.Reservation{
+					{
+						Instances: []ec2types.Instance{
+							{InstanceId: aws.String("i-target"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := resolveInstanceID(context.Background(), client, Config{InstanceID: "i-target"}, false)
+		if err != nil {
+			t.Fatalf("resolveInstanceID() unexpected error: %v", err)
+		}
+		if got != "i-target" {
+			t.Fatalf("instance id = %q, want %q", got, "i-target")
+		}
+		if client.gotInput == nil {
+			t.Fatal("DescribeInstances input was not captured")
+		}
+		if len(client.gotInput.InstanceIds) != 1 || client.gotInput.InstanceIds[0] != "i-target" {
+			t.Fatalf("instance IDs query = %v, want [i-target]", client.gotInput.InstanceIds)
+		}
+	})
+
+	t.Run("uses instance name path when instance id is empty", func(t *testing.T) {
+		t.Parallel()
+
+		client := &fakeEC2Client{
+			output: &ec2.DescribeInstancesOutput{
+				Reservations: []ec2types.Reservation{
+					{
+						Instances: []ec2types.Instance{
+							{InstanceId: aws.String("i-running"), State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := resolveInstanceID(context.Background(), client, Config{InstanceName: "bastion"}, false)
+		if err != nil {
+			t.Fatalf("resolveInstanceID() unexpected error: %v", err)
+		}
+		if got != "i-running" {
+			t.Fatalf("instance id = %q, want %q", got, "i-running")
+		}
+		if client.gotInput == nil {
+			t.Fatal("DescribeInstances input was not captured")
+		}
+		if len(client.gotInput.Filters) != 1 {
+			t.Fatalf("filters length = %d, want 1", len(client.gotInput.Filters))
+		}
+		f := client.gotInput.Filters[0]
+		if aws.ToString(f.Name) != "tag:Name" {
+			t.Fatalf("filter name = %q, want %q", aws.ToString(f.Name), "tag:Name")
+		}
+		if len(f.Values) != 1 || f.Values[0] != "bastion" {
+			t.Fatalf("filter values = %v, want [bastion]", f.Values)
+		}
+	})
 }
 
 func TestStartPortForwarding(t *testing.T) {

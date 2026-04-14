@@ -183,7 +183,7 @@ func validateSelectionOptions(cfg Config, allowAny bool) error {
 	return nil
 }
 
-func getInstanceIDByName(client ec2DescribeInstancesAPI, instanceName string, allowAny bool, chooseIndex func(int) (int, error)) (string, error) {
+func getInstanceIDByName(ctx context.Context, client ec2DescribeInstancesAPI, instanceName string, allowAny bool, chooseIndex func(int) (int, error)) (string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []types.Filter{
 			{
@@ -192,7 +192,7 @@ func getInstanceIDByName(client ec2DescribeInstancesAPI, instanceName string, al
 			},
 		},
 	}
-	output, err := client.DescribeInstances(context.TODO(), input)
+	output, err := client.DescribeInstances(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -234,11 +234,11 @@ func getInstanceIDByName(client ec2DescribeInstancesAPI, instanceName string, al
 	}
 }
 
-func getInstanceIDByID(client ec2DescribeInstancesAPI, instanceID string) (string, error) {
+func getInstanceIDByID(ctx context.Context, client ec2DescribeInstancesAPI, instanceID string) (string, error) {
 	input := &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	}
-	output, err := client.DescribeInstances(context.TODO(), input)
+	output, err := client.DescribeInstances(ctx, input)
 	if err != nil {
 		return "", err
 	}
@@ -268,11 +268,11 @@ func getInstanceIDByID(client ec2DescribeInstancesAPI, instanceID string) (strin
 	return "", fmt.Errorf("%w: %q", ErrInstanceNotFound, instanceID)
 }
 
-func resolveInstanceID(client ec2DescribeInstancesAPI, cfg Config, allowAny bool) (string, error) {
+func resolveInstanceID(ctx context.Context, client ec2DescribeInstancesAPI, cfg Config, allowAny bool) (string, error) {
 	if strings.TrimSpace(cfg.InstanceID) != "" {
-		return getInstanceIDByID(client, cfg.InstanceID)
+		return getInstanceIDByID(ctx, client, cfg.InstanceID)
 	}
-	return getInstanceIDByName(client, cfg.InstanceName, allowAny, randomIndex)
+	return getInstanceIDByName(ctx, client, cfg.InstanceName, allowAny, randomIndex)
 }
 
 func startPortForwarding(client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
@@ -419,6 +419,8 @@ func main() {
 	var configFile string
 	var allowAny bool
 	var cliCfg Config
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
 	flag.StringVar(&cliCfg.Profile, "profile", "", "AWS profile name")
@@ -455,7 +457,7 @@ func main() {
 	}
 
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	instanceID, err := resolveInstanceID(ec2Client, cfg, allowAny)
+	instanceID, err := resolveInstanceID(ctx, ec2Client, cfg, allowAny)
 	if err != nil {
 		log.Fatalf("Failed to get instance ID: %v", err)
 	}
@@ -469,9 +471,6 @@ func main() {
 	fmt.Println("Port forwarding session started.\nPress Ctrl-C to terminate.")
 
 	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	err = runSessionLifecycle(
 		ctx,
