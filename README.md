@@ -148,9 +148,15 @@ Destroys the above resources.
 - `make` — build for your current system
 - `make install` — install to `/usr/local/bin`
 - `make <os>-<arch>` — cross-compile (e.g. `make windows-amd64`)
+- `make cross` — build all configured cross-platform binaries
 - `make test` — run Go unit tests (`go test ./...`)
+- `make fmt` — format Go code (`go fmt ./...`)
+- `make vet` — run static checks (`go vet ./...`)
+- `make check` — run `fmt`, `vet`, and `test`
 - `make integration-up` — apply terraform test environment
 - `make integration-down` — destroy test environment
+
+Build outputs are written to `build/` for both host and cross-compilation targets.
 
 ---
 
