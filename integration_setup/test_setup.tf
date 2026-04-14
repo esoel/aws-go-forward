@@ -169,10 +169,21 @@ resource "aws_instance" "ec2" {
   EOF
 }
 
+resource "local_file" "aws_go_forward_config" {
+  filename = "${path.module}/aws-go-forward.ini"
+  content = templatefile("${path.module}/aws-go-forward.ini.tmpl", {
+    region        = var.region
+    instance_name = aws_instance.ec2.tags["Name"]
+    remote_host   = aws_db_instance.mariadb.address
+  })
+}
+
 output "aws_go_forward_command" {
   value       = <<EOT
   ## Run:
 ./aws-go-forward --profile default --instance-name ${aws_instance.ec2.tags["Name"]} --local-port 3306 --remote-host ${aws_db_instance.mariadb.address} --remote-port 3306 --region ${var.region}
+ ## Or use the generated config file:
+./aws-go-forward --config integration_setup/aws-go-forward.ini
  ## And:
 mysql -u admin -p'${random_password.db_password.result}' -h 127.0.0.1 -P 3306
  ## in 2 separate shells.

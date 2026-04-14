@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"local_port = 3306",
 		"remote_host = db.internal",
 		"remote_port = 3306",
+		"use_builtin = true",
 	}, "\n")
 
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
@@ -95,6 +98,65 @@ func TestLoadConfigFromFileMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFromFileMissingSettingsSection(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "settings.ini")
+	content := strings.Join([]string{
+		"[other]",
+		"profile = default",
+	}, "\n")
+
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	_, err := loadConfigFromFile(configPath)
+	if !errors.Is(err, ErrMissingSettingsSection) {
+		t.Fatalf("expected %v, got %v", ErrMissingSettingsSection, err)
+	}
+}
+
+func TestLoadConfigFromFileMalformedINI(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "settings.ini")
+	content := "[settings\nprofile = default"
+
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	_, err := loadConfigFromFile(configPath)
+	if err == nil {
+		t.Fatal("expected parse error for malformed INI, got nil")
+	}
+}
+
+func TestLoadConfigFromFileInvalidValueType(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "settings.ini")
+	content := strings.Join([]string{
+		"[settings]",
+		"profile = default",
+		"region = us-east-1",
+		"instance_name = my-ec2-instance",
+		"local_port = not-a-number",
+		"remote_host = db.internal",
+		"remote_port = 3306",
+	}, "\n")
+
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	_, err := loadConfigFromFile(configPath)
+	if err == nil {
+		t.Fatal("expected parse error for invalid local_port type, got nil")
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	t.Parallel()
 
@@ -110,15 +172,21 @@ func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     Config
-		wantErr bool
+		wantErr error
 	}{
-		{name: "valid", cfg: valid, wantErr: false},
-		{name: "missing profile", cfg: Config{Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
-		{name: "missing region", cfg: Config{Profile: valid.Profile, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
-		{name: "missing instance", cfg: Config{Profile: valid.Profile, Region: valid.Region, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
-		{name: "missing local port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: true},
-		{name: "missing remote host", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemotePort: valid.RemotePort}, wantErr: true},
-		{name: "missing remote port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost}, wantErr: true},
+		{name: "valid", cfg: valid},
+		{name: "missing profile", cfg: Config{Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrMissingProfile},
+		{name: "whitespace profile", cfg: Config{Profile: "   ", Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrMissingProfile},
+		{name: "missing region", cfg: Config{Profile: valid.Profile, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrMissingRegion},
+		{name: "missing instance", cfg: Config{Profile: valid.Profile, Region: valid.Region, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrMissingInstanceName},
+		{name: "missing local port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrMissingLocalPort},
+		{name: "invalid local port low", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: -1, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrInvalidLocalPort},
+		{name: "invalid local port high", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: 70000, RemoteHost: valid.RemoteHost, RemotePort: valid.RemotePort}, wantErr: ErrInvalidLocalPort},
+		{name: "missing remote host", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemotePort: valid.RemotePort}, wantErr: ErrMissingRemoteHost},
+		{name: "whitespace remote host", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: " \t ", RemotePort: valid.RemotePort}, wantErr: ErrMissingRemoteHost},
+		{name: "missing remote port", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost}, wantErr: ErrMissingRemotePort},
+		{name: "invalid remote port low", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: -1}, wantErr: ErrInvalidRemotePort},
+		{name: "invalid remote port high", cfg: Config{Profile: valid.Profile, Region: valid.Region, InstanceName: valid.InstanceName, LocalPort: valid.LocalPort, RemoteHost: valid.RemoteHost, RemotePort: 70000}, wantErr: ErrInvalidRemotePort},
 	}
 
 	for _, tt := range tests {
@@ -126,13 +194,128 @@ func TestConfigValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			err := tt.cfg.Validate()
-			if tt.wantErr && err == nil {
-				t.Fatal("expected validation error, got nil")
-			}
-			if !tt.wantErr && err != nil {
+			if tt.wantErr == nil && err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected %v, got %v", tt.wantErr, err)
+			}
 		})
+	}
+}
+
+func TestMergeConfigWithCLIOverrides(t *testing.T) {
+	t.Parallel()
+
+	base := Config{
+		Profile:      "profile-from-config",
+		Region:       "us-east-1",
+		InstanceName: "instance-from-config",
+		LocalPort:    3306,
+		RemoteHost:   "db-from-config.internal",
+		RemotePort:   3306,
+	}
+
+	cli := Config{
+		Profile:      "profile-from-cli",
+		Region:       "eu-west-1",
+		InstanceName: "instance-from-cli",
+		LocalPort:    5432,
+		RemoteHost:   "db-from-cli.internal",
+		RemotePort:   5432,
+	}
+
+	tests := []struct {
+		name     string
+		setFlags map[string]bool
+		want     Config
+	}{
+		{
+			name:     "no explicit CLI flags uses config baseline",
+			setFlags: map[string]bool{},
+			want:     base,
+		},
+		{
+			name:     "explicit subset overrides only those fields",
+			setFlags: map[string]bool{"profile": true, "local-port": true},
+			want: Config{
+				Profile:      "profile-from-cli",
+				Region:       "us-east-1",
+				InstanceName: "instance-from-config",
+				LocalPort:    5432,
+				RemoteHost:   "db-from-config.internal",
+				RemotePort:   3306,
+			},
+		},
+		{
+			name:     "all config-related flags override baseline",
+			setFlags: map[string]bool{"profile": true, "region": true, "instance-name": true, "local-port": true, "remote-host": true, "remote-port": true},
+			want: Config{
+				Profile:      "profile-from-cli",
+				Region:       "eu-west-1",
+				InstanceName: "instance-from-cli",
+				LocalPort:    5432,
+				RemoteHost:   "db-from-cli.internal",
+				RemotePort:   5432,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mergeConfigWithCLIOverrides(base, cli, tt.setFlags)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeConfigWithCLIOverrides() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigPrecedenceWithParsedFlags(t *testing.T) {
+	t.Parallel()
+
+	fs := flag.NewFlagSet("aws-go-forward", flag.ContinueOnError)
+
+	var configFile string
+	var cliCfg Config
+
+	fs.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
+	fs.StringVar(&cliCfg.Profile, "profile", "", "AWS profile name")
+	fs.StringVar(&cliCfg.Region, "region", "", "AWS region")
+	fs.StringVar(&cliCfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
+	fs.IntVar(&cliCfg.LocalPort, "local-port", 0, "Local port")
+	fs.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
+	fs.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
+
+	err := fs.Parse([]string{"--config", "cfg.ini", "--profile", "cli-profile", "--local-port", "15432"})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	base := Config{
+		Profile:      "cfg-profile",
+		Region:       "us-east-1",
+		InstanceName: "cfg-instance",
+		LocalPort:    3306,
+		RemoteHost:   "cfg-host",
+		RemotePort:   3306,
+	}
+
+	got := mergeConfigWithCLIOverrides(base, cliCfg, collectSetFlags(fs))
+	want := Config{
+		Profile:      "cli-profile",
+		Region:       "us-east-1",
+		InstanceName: "cfg-instance",
+		LocalPort:    15432,
+		RemoteHost:   "cfg-host",
+		RemotePort:   3306,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged config = %+v, want %+v", got, want)
 	}
 }
 

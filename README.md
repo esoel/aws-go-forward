@@ -99,6 +99,8 @@ Then run:
 aws-go-forward --config mysettings.ini
 ```
 
+When both `--config` and CLI flags are provided, the config file is used as the baseline and explicitly provided CLI flags override those values.
+
 ---
 
 ##  Testing
