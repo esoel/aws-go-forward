@@ -45,9 +45,11 @@ integration-up:
 	@echo "=== Connection Instructions ==="
 	@terraform -chdir=$(INTEGRATION_DIR) output -raw aws_go_forward_command || true
 
-.PHONY: clean-test
-clean-test:
+.PHONY: integration-down clean-test
+integration-down:
 	cd $(INTEGRATION_DIR) && terraform destroy -auto-approve
+
+clean-test: integration-down
 
 # === Clean ===
 .PHONY: clean
