@@ -87,9 +87,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 	if cfg.RemotePort != 3306 {
 		t.Fatalf("RemotePort = %d, want %d", cfg.RemotePort, 3306)
 	}
-	if !cfg.UseBuiltin {
-		t.Fatal("UseBuiltin = false, want true")
-	}
 }
 
 func TestLoadConfigFromFileMissingFile(t *testing.T) {
@@ -217,7 +214,6 @@ func TestMergeConfigWithCLIOverrides(t *testing.T) {
 		LocalPort:    3306,
 		RemoteHost:   "db-from-config.internal",
 		RemotePort:   3306,
-		UseBuiltin:   true,
 	}
 
 	cli := Config{
@@ -249,7 +245,6 @@ func TestMergeConfigWithCLIOverrides(t *testing.T) {
 				LocalPort:    5432,
 				RemoteHost:   "db-from-config.internal",
 				RemotePort:   3306,
-				UseBuiltin:   true,
 			},
 		},
 		{
@@ -262,7 +257,6 @@ func TestMergeConfigWithCLIOverrides(t *testing.T) {
 				LocalPort:    5432,
 				RemoteHost:   "db-from-cli.internal",
 				RemotePort:   5432,
-				UseBuiltin:   true,
 			},
 		},
 	}

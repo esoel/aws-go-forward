@@ -33,7 +33,6 @@ type Config struct {
 	LocalPort    int    `ini:"local_port"`
 	RemoteHost   string `ini:"remote_host"`
 	RemotePort   int    `ini:"remote_port"`
-	UseBuiltin   bool   `ini:"use_builtin"`
 }
 
 var (
@@ -86,6 +85,10 @@ func loadConfigFromFile(configFile string) (*Config, error) {
 		return nil, ErrMissingSettingsSection
 	}
 	section := iniCfg.Section("settings")
+	// Backward compatibility: ignore deprecated setting.
+	if section.HasKey("use_builtin") {
+		section.DeleteKey("use_builtin")
+	}
 	err = section.StrictMapTo(cfg)
 	if err != nil {
 		return nil, err
