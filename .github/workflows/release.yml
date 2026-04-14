@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          APP_NAME="aws-go-forward"
+          DIST_DIR="dist"
+          mkdir -p "${DIST_DIR}"
+
+          targets=(
+            "darwin amd64"
+            "darwin arm64"
+            "linux amd64"
+            "linux arm64"
+            "windows amd64"
+            "windows arm64"
+            "freebsd amd64"
+            "freebsd arm64"
+          )
+
+          for target in "${targets[@]}"; do
+            set -- ${target}
+            goos="$1"
+            goarch="$2"
+
+            ext=""
+            archive_ext=".tar.gz"
+            if [ "${goos}" = "windows" ]; then
+              ext=".exe"
+              archive_ext=".zip"
+            fi
+
+            base="${APP_NAME}-${VERSION}-${goos}-${goarch}"
+            bin_path="${DIST_DIR}/${base}${ext}"
+            pkg_path="${DIST_DIR}/${base}${archive_ext}"
+
+            echo "Building ${goos}/${goarch}..."
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath -ldflags="-s -w" -o "${bin_path}" .
+
+            if [ "${archive_ext}" = ".zip" ]; then
+              zip -j "${pkg_path}" "${bin_path}"
+            else
+              tar -czf "${pkg_path}" -C "${DIST_DIR}" "$(basename "${bin_path}")"
+            fi
+
+            rm -f "${bin_path}"
+          done
+
+          (
+            cd "${DIST_DIR}"
+            sha256sum *.tar.gz *.zip > checksums.txt
+          )
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
