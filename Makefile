@@ -26,7 +26,7 @@ OSARCH := \
 	windows-amd64 windows-arm64 \
 	freebsd-amd64 freebsd-arm64
 
-.PHONY: cross
+.PHONY: cross $(OSARCH)
 cross: $(OSARCH)
 
 $(OSARCH): build-dir
