@@ -53,8 +53,12 @@ etc...
 ```bash
 ./aws-go-forward --help
 Usage of ./aws-go-forward:
+  -any
+        Allow selecting a random running instance when multiple instances match --instance-name
   -config string
         Path to configuration file in INI format (optional)
+  -instance-id string
+        Instance ID used for forwarding
   -instance-name string
         Name of the instance used for forwarding
   -local-port int
@@ -79,6 +83,12 @@ aws-go-forward \
   --remote-port 3306
 ```
 
+Use exactly one selector: `--instance-name` or `--instance-id`.
+
+When using `--instance-name`, if multiple running instances match:
+- default behavior: fail with an ambiguity error
+- with `--any`: select one running match at random
+
 ### INI configuration
 
 Create a file like:
@@ -88,6 +98,8 @@ Create a file like:
 profile = default
 region = us-east-1
 instance_name = my-ec2-instance
+# Or use instance_id instead of instance_name
+# instance_id = i-0123456789abcdef0
 local_port = 3306
 remote_host = my-rds.internal
 remote_port = 3306
