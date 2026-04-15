@@ -1,6 +1,6 @@
 # aws-go-forward
 
-**`aws-go-forward`** is a lightweight utility to forward a local TCP port to a remote host (such as an RDS instance) through an EC2 instance using AWS Session Manager (SSM). It embeds the AWS Session Manager Plugin in Go and requires no external binaries, making it ideal for automation and secure infrastructure setups.
+**`aws-go-forward`** is a lightweight utility for setting up TCP port forwarding through AWS Systems Manager (SSM). It forwards a port from your local machine to a remote host via an EC2 instance managed by SSM, similar to SSH port forwarding but without requiring SSH access. The tool embeds the AWS Session Manager Plugin in Go, so it does not depend on external binaries, which makes it well suited for automation and secure infrastructure environments.
 
 ## Features
 
