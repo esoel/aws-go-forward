@@ -32,6 +32,7 @@ jobs:
 
           APP_NAME="aws-go-forward"
           DIST_DIR="dist"
+          rm -rf "${DIST_DIR}"
           mkdir -p "${DIST_DIR}"
 
           targets=(
@@ -62,40 +63,20 @@ jobs:
             stage_dir="${DIST_DIR}/${base}"
             bin_name="${APP_NAME}${ext}"
             bin_path="${stage_dir}/${bin_name}"
-            readme_path="${stage_dir}/README.md"
 
             echo "Building ${goos}/${goarch}..."
             mkdir -p "${stage_dir}"
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
               go build -trimpath -ldflags="-s -w" -o "${bin_path}" .
-
-            {
-              echo "# aws-go-forward (${VERSION})"
-              echo
-              echo "Target: ${goos}/${goarch}"
-              echo
-              echo "Archive contents:"
-              echo "- ${bin_name}"
-              echo "- README.md"
-              echo
-              echo "Install:"
-              echo "1. Extract this archive."
-              echo "2. Move the binary to a directory on your PATH."
-              echo "3. Ensure executable permissions on Unix-like systems."
-              echo
-              echo "Examples:"
-              echo "- Linux/macOS (system-wide): sudo install -m 0755 ${bin_name} /usr/local/bin/aws-go-forward"
-              echo "- Linux/macOS (user-local): install -m 0755 ${bin_name} \"\$HOME/.local/bin/aws-go-forward\""
-              echo "- Windows: place ${bin_name} in a directory listed in PATH"
-              echo
-              echo "Verify:"
-              echo "- aws-go-forward --help"
-            } > "${readme_path}"
+            cp README.md "${stage_dir}/README.md"
 
             if [ "${archive_ext}" = ".zip" ]; then
-              zip -j "${pkg_path}" "${bin_path}" "${readme_path}"
+              (
+                cd "${DIST_DIR}"
+                zip -r "${base}${archive_ext}" "${base}"
+              )
             else
-              tar -czf "${pkg_path}" -C "${stage_dir}" "${bin_name}" "README.md"
+              tar -czf "${pkg_path}" -C "${DIST_DIR}" "${base}"
             fi
 
             rm -rf "${stage_dir}"
@@ -126,11 +107,11 @@ jobs:
             Example (Linux/macOS):
             ```bash
             tar -xzf aws-go-forward-<version>-linux-amd64.tar.gz
-            sudo install -m 0755 aws-go-forward /usr/local/bin/aws-go-forward
+            sudo install -m 0755 aws-go-forward-<version>-linux-amd64/aws-go-forward /usr/local/bin/aws-go-forward
             aws-go-forward --help
             ```
 
-            Each archive includes a `README.md` with target-specific install notes.
+            Each archive includes the repository `README.md` for full documentation.
           files: |
             dist/*.tar.gz
             dist/*.zip
