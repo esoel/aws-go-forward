@@ -73,5 +73,4 @@ clean-test: integration-down
 .PHONY: clean
 clean:
 	@echo "Cleaning up..."
-	rm -f $(APP_NAME)
 	rm -rf $(BUILD_DIR)
