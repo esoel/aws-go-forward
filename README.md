@@ -189,6 +189,7 @@ Destroys the above resources.
 - `make install` — install to `/usr/local/bin`
 - `make <os>-<arch>` — cross-compile (e.g. `make windows-amd64`)
 - `make cross` — build all configured cross-platform binaries
+- `make clean` — remove build artifacts from `build/`
 - `make test` — run Go unit tests (`go test ./...`)
 - `make fmt` — format Go code (`go fmt ./...`)
 - `make vet` — run static checks (`go vet ./...`)
