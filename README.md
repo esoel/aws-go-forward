@@ -12,30 +12,43 @@
 
 ---
 
-## Prerequisites
+## Installation
 
-- Go 1.20+ installed
-- AWS credentials configured (`~/.aws/credentials`)
-- EC2 instance with:
-  - `AmazonSSMManagedInstanceCore` IAM policy
-  - Tag `Name=<instance-name>`
-  - SSM agent installed and running
-- Your target (e.g. RDS) must be reachable from the EC2 instance
+### Install from binary (recommended)
 
----
+Download a release archive from:
 
-##  Installation
+- [Latest release](https://github.com/esoel/aws-go-forward/releases/latest)
+- [All releases](https://github.com/esoel/aws-go-forward/releases)
 
-### Build for your system
+Each archive is named:
+
+- `aws-go-forward-<version>-<os>-<arch>.tar.gz` (Linux/macOS/FreeBSD)
+- `aws-go-forward-<version>-<os>-<arch>.zip` (Windows)
+
+Each archive extracts to a top-level folder with the same base name and includes:
+
+- `aws-go-forward` (or `aws-go-forward.exe`)
+- `README.md` (the repository README)
+
+Download the archive and matching `checksums.txt` from the selected release, verify the archive checksum, extract it, and move the extracted binary into a directory on your `PATH` (for example `/usr/local/bin` on Unix-like systems, or any PATH directory on Windows). Then run `aws-go-forward --help` to confirm installation.
+
+### Install from source
+
+Requires Go 1.24+.
+
+Build and install from the repository root:
 
 ```bash
+git clone https://github.com/esoel/aws-go-forward.git
+cd aws-go-forward
 make
 make install
 ```
 
 This builds the binary and installs it to `/usr/local/bin` (override with `INSTALL_DIR` if needed).
 
-### Cross-compile
+### Build from source for other targets
 
 ```bash
 make linux-arm64
@@ -43,7 +56,22 @@ make darwin-arm64
 make windows-amd64
 ```
 
-etc...
+or build all supported targets:
+
+```bash
+make cross
+```
+
+---
+
+## Runtime Prerequisites
+
+- AWS credentials configured (`~/.aws/credentials`) and allowed to use SSM/EC2 APIs
+- EC2 instance with:
+  - `AmazonSSMManagedInstanceCore` IAM policy
+  - A unique `Name` tag (if you select by `--instance-name`) or a known EC2 instance ID (if you select by `--instance-id`)
+  - SSM agent installed and running
+- The target endpoint you want to forward to (`remote_host:remote_port`) must be network-reachable from the selected EC2 instance, whether that target runs on the instance itself or on another host (for example RDS/private service in the same VPC)
 
 ---
 

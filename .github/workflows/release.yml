@@ -32,6 +32,7 @@ jobs:
 
           APP_NAME="aws-go-forward"
           DIST_DIR="dist"
+          rm -rf "${DIST_DIR}"
           mkdir -p "${DIST_DIR}"
 
           targets=(
@@ -58,20 +59,27 @@ jobs:
             fi
 
             base="${APP_NAME}-${VERSION}-${goos}-${goarch}"
-            bin_path="${DIST_DIR}/${base}${ext}"
             pkg_path="${DIST_DIR}/${base}${archive_ext}"
+            stage_dir="${DIST_DIR}/${base}"
+            bin_name="${APP_NAME}${ext}"
+            bin_path="${stage_dir}/${bin_name}"
 
             echo "Building ${goos}/${goarch}..."
+            mkdir -p "${stage_dir}"
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
               go build -trimpath -ldflags="-s -w" -o "${bin_path}" .
+            cp README.md "${stage_dir}/README.md"
 
             if [ "${archive_ext}" = ".zip" ]; then
-              zip -j "${pkg_path}" "${bin_path}"
+              (
+                cd "${DIST_DIR}"
+                zip -r "${base}${archive_ext}" "${base}"
+              )
             else
-              tar -czf "${pkg_path}" -C "${DIST_DIR}" "$(basename "${bin_path}")"
+              tar -czf "${pkg_path}" -C "${DIST_DIR}" "${base}"
             fi
 
-            rm -f "${bin_path}"
+            rm -rf "${stage_dir}"
           done
 
           (
@@ -82,7 +90,28 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
-          generate_release_notes: true
+          body: |
+            ## Download
+
+            1. Open the **Assets** section below.
+            2. Download the archive for your platform:
+               - `aws-go-forward-<version>-<os>-<arch>.tar.gz` (Linux/macOS/FreeBSD)
+               - `aws-go-forward-<version>-<os>-<arch>.zip` (Windows)
+            3. Optionally verify checksums with `checksums.txt`.
+
+            ## Install
+
+            1. Extract the downloaded archive.
+            2. Move the binary (`aws-go-forward` or `aws-go-forward.exe`) into a directory on your `PATH`.
+
+            Example (Linux/macOS):
+            ```bash
+            tar -xzf aws-go-forward-<version>-linux-amd64.tar.gz
+            sudo install -m 0755 aws-go-forward-<version>-linux-amd64/aws-go-forward /usr/local/bin/aws-go-forward
+            aws-go-forward --help
+            ```
+
+            Each archive includes the repository `README.md` for full documentation.
           files: |
             dist/*.tar.gz
             dist/*.zip
