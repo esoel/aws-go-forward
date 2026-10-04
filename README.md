@@ -141,6 +141,8 @@ aws-go-forward --config mysettings.ini
 
 When both `--config` and CLI flags are provided, the config file is used as the baseline and explicitly provided CLI flags override those values.
 
+If the embedded Session Manager plugin reports a startup failure, the command prints the error to stderr and exits with a non-zero status.
+
 ---
 
 ##  Testing

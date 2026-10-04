@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -370,7 +371,7 @@ func runSessionLifecycle(
 	return pluginErr
 }
 
-func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string) error {
+func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, profile, instanceID string, ssmEndpoint string, runPlugin func([]string, io.Writer)) error {
 	pluginData, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("failed to marshal session response: %w", err)
@@ -385,13 +386,13 @@ func startSessionManagerPluginBuiltin(response *ssm.StartSessionOutput, region, 
 		ssmEndpoint,
 	}
 
-	// Buffer to capture output
+	// The plugin reports startup errors through its output writer.
 	var output bytes.Buffer
 
-	session.ValidateInputAndStartSession(args, &output)
+	runPlugin(args, &output)
 
-	if len(output.Bytes()) > 0 {
-		fmt.Printf("Session Manager Output: %s\n", output.String())
+	if output.Len() > 0 {
+		return fmt.Errorf("session manager plugin failed: %s", strings.TrimSpace(output.String()))
 	}
 
 	return nil
@@ -487,7 +488,7 @@ func main() {
 		cfg.LocalPort,
 		aws.ToString(sessionResponse.SessionId),
 		func() error {
-			return startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint)
+			return startSessionManagerPluginBuiltin(sessionResponse, cfg.Region, cfg.Profile, instanceID, ssmEndpoint, session.ValidateInputAndStartSession)
 		},
 		func(ctx context.Context, sessionID string) error {
 			return terminatePortForwardingSession(ctx, ssmClient, sessionID)

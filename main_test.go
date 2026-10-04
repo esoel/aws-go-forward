@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -893,6 +894,46 @@ func TestStartPortForwarding(t *testing.T) {
 			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
 		}
 	})
+}
+
+func TestStartSessionManagerPluginBuiltin(t *testing.T) {
+	t.Parallel()
+
+	response := &ssm.StartSessionOutput{SessionId: aws.String("session-123")}
+	tests := []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{name: "plugin succeeds"},
+		{name: "plugin reports startup failure", output: "Cannot perform start session: websocket failed\n", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			called := false
+			runPlugin := func(args []string, out io.Writer) {
+				called = true
+				if len(args) != 7 || args[3] != "StartSession" {
+					t.Errorf("plugin args = %v, want StartSession invocation", args)
+				}
+				_, _ = io.WriteString(out, tt.output)
+			}
+
+			err := startSessionManagerPluginBuiltin(response, "us-east-1", "default", "i-123", "https://ssm.us-east-1.amazonaws.com", runPlugin)
+			if !called {
+				t.Fatal("plugin was not called")
+			}
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, want error %t", err, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), "websocket failed") {
+				t.Fatalf("error = %v, want plugin diagnostic", err)
+			}
+		})
+	}
 }
 
 func TestKeepAliveStopsWhenSignaled(t *testing.T) {
