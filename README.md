@@ -73,6 +73,8 @@ make cross
   - SSM agent installed and running
 - The target endpoint you want to forward to (`remote_host:remote_port`) must be network-reachable from the selected EC2 instance, whether that target runs on the instance itself or on another host (for example RDS/private service in the same VPC)
 
+For SSH over SSM, the selected instance must also run an SSH server on the chosen remote port, and your SSH account and key must be accepted by that server. The instance does not need an inbound SSH security group rule.
+
 ---
 
 ##  Usage
@@ -99,6 +101,8 @@ Usage of aws-go-forward:
         Remote host
   -remote-port int
         Remote port
+  -stdio
+        Use stdin/stdout as an SSH ProxyCommand transport
 ```
 
 ```bash
@@ -142,6 +146,21 @@ aws-go-forward --config mysettings.ini
 When both `--config` and CLI flags are provided, the config file is used as the baseline and explicitly provided CLI flags override those values.
 
 If the embedded Session Manager plugin reports a startup failure, the command prints the error to stderr and exits with a non-zero status.
+
+### SSH ProxyCommand
+
+Add an entry like this to `~/.ssh/config`:
+
+```sshconfig
+Host *.staging.example.internal
+  ProxyCommand aws-go-forward --stdio --profile staging --region eu-west-2 --instance-name %h --remote-port %p
+```
+
+Then use `ssh`, `scp`, `sftp`, or another SSH-based tool with a host whose EC2 `Name` tag matches the SSH hostname exactly (including case). Normal SSH user and key authentication still applies. Use `--instance-id` instead of `--instance-name` when targeting an instance ID directly.
+
+In stdio mode, `--remote-port` is the SSH server port (usually 22). Do not supply `--local-port`, `--remote-host`, or `--any`; stdio mode does not open a local listener, and ambiguous Name tag matches fail. The `AWS-StartSSHSession` document and permission to describe instances, open the session data channel, and terminate sessions are required. See the [AWS guide to SSH through Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-getting-started-enable-ssh-connections.html) for IAM and instance setup.
+
+Only SSH bytes are written to stdout; errors go to stderr. In stdio mode, exit status `3` means no matching running instance, `4` means ambiguous Name-tag matches, `5` means an expired or unavailable credential, and `6` means another session failure. Configuration errors use exit status `1`. If an SSO token expires, sign in again with `aws sso login --profile <name>` before retrying.
 
 ---
 
