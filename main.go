@@ -59,19 +59,8 @@ var (
 )
 
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.Profile) == "" {
-		return ErrMissingProfile
-	}
-	if strings.TrimSpace(c.Region) == "" {
-		return ErrMissingRegion
-	}
-	instanceName := strings.TrimSpace(c.InstanceName)
-	instanceID := strings.TrimSpace(c.InstanceID)
-	if instanceName == "" && instanceID == "" {
-		return ErrMissingInstanceSelector
-	}
-	if instanceName != "" && instanceID != "" {
-		return ErrConflictingInstanceSelectors
+	if err := c.validateCommon(); err != nil {
+		return err
 	}
 	if c.LocalPort == 0 {
 		return ErrMissingLocalPort
@@ -87,6 +76,24 @@ func (c Config) Validate() error {
 	}
 	if c.RemotePort < 1 || c.RemotePort > 65535 {
 		return ErrInvalidRemotePort
+	}
+	return nil
+}
+
+func (c Config) validateCommon() error {
+	if strings.TrimSpace(c.Profile) == "" {
+		return ErrMissingProfile
+	}
+	if strings.TrimSpace(c.Region) == "" {
+		return ErrMissingRegion
+	}
+	instanceName := strings.TrimSpace(c.InstanceName)
+	instanceID := strings.TrimSpace(c.InstanceID)
+	if instanceName == "" && instanceID == "" {
+		return ErrMissingInstanceSelector
+	}
+	if instanceName != "" && instanceID != "" {
+		return ErrConflictingInstanceSelectors
 	}
 	return nil
 }
@@ -429,11 +436,11 @@ func KeepAlive(localPort int, stopChan <-chan struct{}) {
 func main() {
 	var configFile string
 	var allowAny bool
+	var stdio bool
 	var cliCfg Config
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	flag.StringVar(&configFile, "config", "", "Path to configuration file in INI format (optional)")
+	flag.BoolVar(&stdio, "stdio", false, "Use stdin/stdout as an SSH ProxyCommand transport")
 	flag.StringVar(&cliCfg.Profile, "profile", "", "AWS profile name")
 	flag.StringVar(&cliCfg.Region, "region", "", "AWS region")
 	flag.StringVar(&cliCfg.InstanceName, "instance-name", "", "Name of the instance used for forwarding")
@@ -443,6 +450,8 @@ func main() {
 	flag.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
 	flag.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
 	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), append([]os.Signal{os.Interrupt, syscall.SIGTERM}, hangupSignals()...)...)
+	defer stop()
 
 	setFlags := collectSetFlags(flag.CommandLine)
 	cfg := cliCfg
@@ -455,11 +464,26 @@ func main() {
 		cfg = mergeConfigWithCLIOverrides(*fileCfg, cliCfg, setFlags)
 	}
 
-	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v. Use --help for more information.", err)
+	var validateErr error
+	if stdio {
+		validateErr = validateStdioConfig(cfg, allowAny)
+	} else {
+		validateErr = cfg.Validate()
 	}
-	if err := validateSelectionOptions(cfg, allowAny); err != nil {
-		log.Fatalf("Invalid selection options: %v. Use --help for more information.", err)
+	if validateErr != nil {
+		log.Fatalf("Invalid configuration: %v. Use --help for more information.", validateErr)
+	}
+	if !stdio {
+		if err := validateSelectionOptions(cfg, allowAny); err != nil {
+			log.Fatalf("Invalid selection options: %v. Use --help for more information.", err)
+		}
+	}
+	if stdio {
+		if err := runSSH(ctx, cfg, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "aws-go-forward:", stdioErrorMessage(err, cfg.Profile))
+			os.Exit(stdioExitCode(err))
+		}
+		return
 	}
 
 	awsCfg, err := createAWSSession(ctx, cfg.Profile, cfg.Region)
@@ -474,14 +498,13 @@ func main() {
 	}
 
 	ssmClient := ssm.NewFromConfig(awsCfg)
+	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 	sessionResponse, err := startPortForwarding(ctx, ssmClient, instanceID, cfg.RemoteHost, cfg.LocalPort, cfg.RemotePort)
 	if err != nil {
 		log.Fatalf("Failed to start port forwarding: %v", err)
 	}
 
 	fmt.Println("Port forwarding session started.\nPress Ctrl-C to terminate.")
-
-	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 
 	err = runSessionLifecycle(
 		ctx,
