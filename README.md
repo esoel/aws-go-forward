@@ -87,6 +87,8 @@ Usage of aws-go-forward:
         Allow selecting a random running instance when multiple instances match --instance-name
   -config string
         Path to configuration file in INI format (optional)
+  -document-name string
+        SSM session document name (defaults to the document for the selected mode)
   -instance-id string
         Instance ID used for forwarding
   -instance-name string
@@ -135,6 +137,8 @@ instance_name = my-ec2-instance
 local_port = 3306
 remote_host = my-rds.internal
 remote_port = 3306
+# Optional: use a compatible custom port-forwarding session document
+# document_name = CustomPortDocument
 ```
 
 Then run:
@@ -144,6 +148,8 @@ aws-go-forward --config mysettings.ini
 ```
 
 When both `--config` and CLI flags are provided, the config file is used as the baseline and explicitly provided CLI flags override those values.
+
+`--document-name` (or `document_name` in the INI file) selects an SSM session document. If omitted, normal forwarding uses `AWS-StartPortForwardingSessionToRemoteHost` and `--stdio` uses `AWS-StartSSHSession`. For example, add `--document-name CustomPortDocument` to the forwarding command, or `--document-name CustomSSHDocument` to the SSH ProxyCommand below. A custom document must support the selected mode's existing parameters: `host`, `portNumber`, and `localPortNumber` for normal forwarding; `portNumber` for stdio. The named document must exist and your AWS identity must be authorized to start sessions with it.
 
 If the embedded Session Manager plugin reports a startup failure, the command prints the error to stderr and exits with a non-zero status.
 
