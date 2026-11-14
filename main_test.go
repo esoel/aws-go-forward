@@ -58,6 +58,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"local_port = 3306",
 		"remote_host = db.internal",
 		"remote_port = 3306",
+		"document_name = CustomPortDocument",
 		"use_builtin = true",
 	}, "\n")
 
@@ -87,6 +88,9 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.RemotePort != 3306 {
 		t.Fatalf("RemotePort = %d, want %d", cfg.RemotePort, 3306)
+	}
+	if cfg.DocumentName != "CustomPortDocument" {
+		t.Fatalf("DocumentName = %q, want %q", cfg.DocumentName, "CustomPortDocument")
 	}
 }
 
@@ -333,8 +337,9 @@ func TestConfigPrecedenceWithParsedFlags(t *testing.T) {
 	fs.IntVar(&cliCfg.LocalPort, "local-port", 0, "Local port")
 	fs.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
 	fs.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
+	fs.StringVar(&cliCfg.DocumentName, "document-name", "", "SSM session document name")
 
-	err := fs.Parse([]string{"--config", "cfg.ini", "--profile", "cli-profile", "--local-port", "15432", "--instance-id", "i-cli"})
+	err := fs.Parse([]string{"--config", "cfg.ini", "--profile", "cli-profile", "--local-port", "15432", "--instance-id", "i-cli", "--document-name", "CustomFromCLI"})
 	if err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
@@ -347,6 +352,7 @@ func TestConfigPrecedenceWithParsedFlags(t *testing.T) {
 		LocalPort:    3306,
 		RemoteHost:   "cfg-host",
 		RemotePort:   3306,
+		DocumentName: "CustomFromFile",
 	}
 
 	got := mergeConfigWithCLIOverrides(base, cliCfg, collectSetFlags(fs))
@@ -358,10 +364,85 @@ func TestConfigPrecedenceWithParsedFlags(t *testing.T) {
 		LocalPort:    15432,
 		RemoteHost:   "cfg-host",
 		RemotePort:   3306,
+		DocumentName: "CustomFromCLI",
 	}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merged config = %+v, want %+v", got, want)
+	}
+}
+
+func TestDocumentNameCLIOverride(t *testing.T) {
+	t.Parallel()
+
+	base := Config{DocumentName: "DocumentFromFile"}
+	cli := Config{DocumentName: "DocumentFromFlag"}
+	if got := mergeConfigWithCLIOverrides(base, cli, nil).DocumentName; got != "DocumentFromFile" {
+		t.Fatalf("without flag, document = %q, want file value", got)
+	}
+	if got := mergeConfigWithCLIOverrides(base, cli, map[string]bool{"document-name": true}).DocumentName; got != "DocumentFromFlag" {
+		t.Fatalf("with flag, document = %q, want CLI value", got)
+	}
+}
+
+func TestDocumentNameForMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		cfg   Config
+		stdio bool
+		want  string
+	}{
+		{name: "default forwarding", want: "AWS-StartPortForwardingSessionToRemoteHost"},
+		{name: "default stdio", stdio: true, want: "AWS-StartSSHSession"},
+		{name: "custom forwarding", cfg: Config{DocumentName: "CustomPortDocument"}, want: "CustomPortDocument"},
+		{name: "custom stdio", cfg: Config{DocumentName: "CustomSSHDocument"}, stdio: true, want: "CustomSSHDocument"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.cfg.documentName(tt.stdio); got != tt.want {
+				t.Fatalf("documentName(%t) = %q, want %q", tt.stdio, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigDocumentNameValidation(t *testing.T) {
+	t.Parallel()
+
+	base := Config{Profile: "default", Region: "eu-west-2", InstanceID: "i-123", LocalPort: 3306, RemoteHost: "db.internal", RemotePort: 22}
+	tests := []struct {
+		name     string
+		document string
+		wantErr  bool
+	}{
+		{name: "default"},
+		{name: "custom", document: "Custom_Document-1"},
+		{name: "document ARN", document: "arn:aws:ssm:eu-west-2:123456789012:document/CustomDoc"},
+		{name: "whitespace", document: "   ", wantErr: true},
+		{name: "invalid characters", document: "not valid", wantErr: true},
+		{name: "too short", document: "ab", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := base
+			cfg.DocumentName = tt.document
+			stdioCfg := cfg
+			stdioCfg.LocalPort = 0
+			stdioCfg.RemoteHost = ""
+			for _, validate := range []func() error{cfg.Validate, func() error { return validateStdioConfig(stdioCfg, false) }} {
+				err := validate()
+				if tt.wantErr && !errors.Is(err, ErrInvalidDocumentName) {
+					t.Fatalf("validation = %v, want invalid document name", err)
+				}
+				if !tt.wantErr && err != nil {
+					t.Fatalf("validation = %v, want nil", err)
+				}
+			}
+		})
 	}
 }
 
@@ -856,7 +937,7 @@ func TestStartPortForwarding(t *testing.T) {
 		wantOutput := &ssm.StartSessionOutput{SessionId: aws.String("session-123")}
 		client := &fakeSSMClient{output: wantOutput}
 
-		got, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306)
+		got, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306, "AWS-StartPortForwardingSessionToRemoteHost")
 		if err != nil {
 			t.Fatalf("startPortForwarding() unexpected error: %v", err)
 		}
@@ -889,9 +970,24 @@ func TestStartPortForwarding(t *testing.T) {
 		wantErr := errors.New("ssm down")
 		client := &fakeSSMClient{err: wantErr}
 
-		_, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306)
+		_, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306, "AWS-StartPortForwardingSessionToRemoteHost")
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected wrapped error %v, got %v", wantErr, err)
+		}
+	})
+
+	t.Run("uses custom document", func(t *testing.T) {
+		t.Parallel()
+		client := &fakeSSMClient{output: &ssm.StartSessionOutput{}}
+		_, err := startPortForwarding(context.Background(), client, "i-123", "db.internal", 3306, 3306, "CustomPortDocument")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := aws.ToString(client.gotInput.DocumentName); got != "CustomPortDocument" {
+			t.Fatalf("document name = %q, want CustomPortDocument", got)
+		}
+		if got := client.gotInput.Parameters["host"]; len(got) != 1 || got[0] != "db.internal" {
+			t.Fatalf("host parameter = %v, want [db.internal]", got)
 		}
 	})
 }

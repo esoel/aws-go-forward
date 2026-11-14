@@ -57,7 +57,7 @@ func TestStartSSHSession(t *testing.T) {
 
 	want := &ssm.StartSessionOutput{SessionId: aws.String("session-123")}
 	client := &fakeSSMClient{output: want}
-	got, err := startSSHSession(context.Background(), client, "i-123", 22)
+	got, err := startSSHSession(context.Background(), client, "i-123", 22, "AWS-StartSSHSession")
 	if err != nil || got != want {
 		t.Fatalf("startSSHSession() = %v, %v; want output and no error", got, err)
 	}
@@ -69,6 +69,21 @@ func TestStartSSHSession(t *testing.T) {
 	}
 	if len(client.gotInput.Parameters) != 1 {
 		t.Fatalf("parameters = %v, want only portNumber", client.gotInput.Parameters)
+	}
+}
+
+func TestStartSSHSessionCustomDocument(t *testing.T) {
+	t.Parallel()
+	client := &fakeSSMClient{output: &ssm.StartSessionOutput{}}
+	_, err := startSSHSession(context.Background(), client, "i-123", 22, "CustomSSHDocument")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aws.ToString(client.gotInput.DocumentName); got != "CustomSSHDocument" {
+		t.Fatalf("document name = %q, want CustomSSHDocument", got)
+	}
+	if got := client.gotInput.Parameters["portNumber"]; len(got) != 1 || got[0] != "22" {
+		t.Fatalf("portNumber = %v, want [22]", got)
 	}
 }
 

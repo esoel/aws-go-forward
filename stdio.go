@@ -89,10 +89,10 @@ func validateStdioConfig(cfg Config, allowAny bool) error {
 	return nil
 }
 
-func startSSHSession(ctx context.Context, client ssmStartSessionAPI, instanceID string, remotePort int) (*ssm.StartSessionOutput, error) {
+func startSSHSession(ctx context.Context, client ssmStartSessionAPI, instanceID string, remotePort int, documentName string) (*ssm.StartSessionOutput, error) {
 	return client.StartSession(ctx, &ssm.StartSessionInput{
 		Target:       aws.String(instanceID),
-		DocumentName: aws.String("AWS-StartSSHSession"),
+		DocumentName: aws.String(documentName),
 		Parameters: map[string][]string{
 			"portNumber": {fmt.Sprintf("%d", remotePort)},
 		},
@@ -116,7 +116,7 @@ func runSSH(ctx context.Context, cfg Config, output io.Writer) error {
 		return fmt.Errorf("resolve instance: %w", err)
 	}
 	ssmClient := ssm.NewFromConfig(awsCfg)
-	response, err := startSSHSession(ctx, ssmClient, instanceID, cfg.RemotePort)
+	response, err := startSSHSession(ctx, ssmClient, instanceID, cfg.RemotePort, cfg.documentName(true))
 	if err != nil {
 		return fmt.Errorf("start SSH session: %w", err)
 	}

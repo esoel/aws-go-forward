@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,7 @@ type Config struct {
 	LocalPort    int    `ini:"local_port"`
 	RemoteHost   string `ini:"remote_host"`
 	RemotePort   int    `ini:"remote_port"`
+	DocumentName string `ini:"document_name"`
 }
 
 var (
@@ -50,6 +52,7 @@ var (
 	ErrMissingRemoteHost            = errors.New("missing remote host")
 	ErrMissingRemotePort            = errors.New("missing remote port")
 	ErrInvalidRemotePort            = errors.New("invalid remote port")
+	ErrInvalidDocumentName          = errors.New("invalid SSM document name")
 	ErrNoRunningInstances           = errors.New("no running instances found")
 	ErrMultipleRunningInstances     = errors.New("multiple running instances found")
 	ErrInvalidInstanceState         = errors.New("instance has nil state")
@@ -57,6 +60,8 @@ var (
 	ErrInstanceNotFound             = errors.New("instance not found")
 	ErrInstanceNotRunning           = errors.New("instance is not running")
 )
+
+var documentNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_\-.:/]{3,128}$`)
 
 func (c Config) Validate() error {
 	if err := c.validateCommon(); err != nil {
@@ -95,7 +100,20 @@ func (c Config) validateCommon() error {
 	if instanceName != "" && instanceID != "" {
 		return ErrConflictingInstanceSelectors
 	}
+	if c.DocumentName != "" && !documentNamePattern.MatchString(c.DocumentName) {
+		return ErrInvalidDocumentName
+	}
 	return nil
+}
+
+func (c Config) documentName(stdio bool) string {
+	if c.DocumentName != "" {
+		return c.DocumentName
+	}
+	if stdio {
+		return "AWS-StartSSHSession"
+	}
+	return "AWS-StartPortForwardingSessionToRemoteHost"
 }
 
 func loadConfigFromFile(configFile string) (*Config, error) {
@@ -152,6 +170,9 @@ func mergeConfigWithCLIOverrides(base, cli Config, setFlags map[string]bool) Con
 	}
 	if setFlags["remote-port"] {
 		merged.RemotePort = cli.RemotePort
+	}
+	if setFlags["document-name"] {
+		merged.DocumentName = cli.DocumentName
 	}
 
 	return merged
@@ -293,10 +314,10 @@ func resolveInstanceID(ctx context.Context, client ec2DescribeInstancesAPI, cfg 
 	return getInstanceIDByName(ctx, client, cfg.InstanceName, allowAny, randomIndex)
 }
 
-func startPortForwarding(ctx context.Context, client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int) (*ssm.StartSessionOutput, error) {
+func startPortForwarding(ctx context.Context, client ssmStartSessionAPI, instanceID, remoteHost string, localPort, remotePort int, documentName string) (*ssm.StartSessionOutput, error) {
 	input := &ssm.StartSessionInput{
 		Target:       aws.String(instanceID),
-		DocumentName: aws.String("AWS-StartPortForwardingSessionToRemoteHost"),
+		DocumentName: aws.String(documentName),
 		Parameters: map[string][]string{
 			"localPortNumber": {fmt.Sprintf("%d", localPort)},
 			"host":            {remoteHost},
@@ -449,6 +470,7 @@ func main() {
 	flag.IntVar(&cliCfg.LocalPort, "local-port", 0, "Local port")
 	flag.StringVar(&cliCfg.RemoteHost, "remote-host", "", "Remote host")
 	flag.IntVar(&cliCfg.RemotePort, "remote-port", 0, "Remote port")
+	flag.StringVar(&cliCfg.DocumentName, "document-name", "", "SSM session document name (defaults to the document for the selected mode)")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), append([]os.Signal{os.Interrupt, syscall.SIGTERM}, hangupSignals()...)...)
 	defer stop()
@@ -499,7 +521,7 @@ func main() {
 
 	ssmClient := ssm.NewFromConfig(awsCfg)
 	ssmEndpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
-	sessionResponse, err := startPortForwarding(ctx, ssmClient, instanceID, cfg.RemoteHost, cfg.LocalPort, cfg.RemotePort)
+	sessionResponse, err := startPortForwarding(ctx, ssmClient, instanceID, cfg.RemoteHost, cfg.LocalPort, cfg.RemotePort, cfg.documentName(false))
 	if err != nil {
 		log.Fatalf("Failed to start port forwarding: %v", err)
 	}
